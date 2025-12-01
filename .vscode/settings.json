@@ -1,0 +1,25 @@
+{
+    "workbench.tree.indent": 20,
+    "editor.rulers": [
+        120
+    ],
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.semanticHighlighting.enabled": true,
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit",
+            "source.unusedImports": "explicit",
+            "source.fixAll": "explicit"
+        }
+    },
+    "black-formatter.args": [
+        "--line-length",
+        "100"
+    ],
+    "python.testing.autoTestDiscoverOnSaveEnabled": true,
+    "editor.inlayHints.fontSize": 10,
+    "python.analysis.inlayHints.callArgumentNames": "all",
+    "python.analysis.inlayHints.functionReturnTypes": true,
+    "python.analysis.inlayHints.pytestParameters": true,
+}
