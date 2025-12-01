@@ -1,0 +1,43 @@
+# Start from a base Ubuntu image
+FROM --platform=linux/amd64 ubuntu:22.04
+
+# Set the PYTHONPATH environment variable
+ENV PYTHONPATH=/workspaces/MOLT:$PYTHONPATH
+
+# Set a working directory for docker
+WORKDIR /workspaces/MOLT
+
+SHELL ["/bin/bash", "-c"]
+
+# Install dependencies
+RUN apt update && \
+    apt-get upgrade -y && \
+    apt-get install -y git curl zsh ffmpeg libsm6 libxext6 freeglut3-dev
+
+# Install Oh My Zsh
+RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+
+# Install Miniforge with Conda
+RUN curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh" && \
+    chmod +x Miniforge3-$(uname)-$(uname -m).sh && \
+    bash Miniforge3-$(uname)-$(uname -m).sh -b -p "/opt/conda" && \
+    rm Miniforge3-$(uname)-$(uname -m).sh
+
+# Initialize Conda
+ENV PATH="/opt/conda/bin:${PATH}"
+
+# Update Conda
+RUN conda update -n base -c conda-forge conda -y
+
+# Create and activate the Conda environment
+COPY environment.yml environment.yml
+RUN conda env create -n molt_env --file environment.yml -v && \
+    echo "source activate molt_env" > ~/.bashrc && \
+    /bin/bash -c "source ~/.bashrc && conda activate molt_env"
+
+# Install Greedy
+RUN curl -L https://sourceforge.net/projects/greedy-reg/files/Nightly/greedy-nightly-Linux-gcc64.tar.gz/download > greedy_download.tar.gz && \
+    tar -xvzf greedy_download.tar.gz && \
+    chmod +x greedy-1.3.0-alpha-Linux-gcc64/bin/* && \
+    mv greedy-1.3.0-alpha-Linux-gcc64/bin/* /bin/ && \
+    rm -r greedy*
