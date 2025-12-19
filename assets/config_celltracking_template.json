@@ -3,7 +3,6 @@
         "data_path": "data/CellTracking/<DATASET_NAME>",
         "result_folder": "results/<DATASET_NAME>",
         "plot_folder": "results/<DATASET_NAME>/plots",
-        "itksnap_output_dir": "results/workspace_files",
         "background_instance": 0,
         "ignore_label": -1,
         "information_sources": [
