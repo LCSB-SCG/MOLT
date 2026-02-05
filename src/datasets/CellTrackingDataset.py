@@ -67,7 +67,7 @@ class CellTrackingDataset:
             logging.info("- Extracting tracking files.")
             d_set.man_track_to_graph_and_lineage()
             logging.info(f"- Removing unnecessary files.")
-            d_set.remove_original_format_files(dataset_path=d_path)
+            # d_set.remove_original_format_files(dataset_path=d_path)
 
     @staticmethod
     def remove_original_format_files(dataset_path):
@@ -1242,3 +1242,7 @@ class CellTrackingDataset:
         self.associate_tracked_instances_with_gt()
         logging.info("Calculating the metrics")
         self.calculate_metrics()
+
+
+if __name__ == "__main__":
+    CellTrackingDataset.setup_datasets()

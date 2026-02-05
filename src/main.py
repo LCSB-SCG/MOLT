@@ -25,6 +25,5 @@ def main(config_path: str, download_cell_datsets: bool = False):
 
 
 if __name__ == "__main__":
-    # config_path = input("Enter the path to the config file:")
-    config_path = "/workspaces/MOLT/data/CellTracking/Fluo-N2DH-GOWT1/config.json"
+    config_path = input("Enter the path to the config file: \n")
     main(config_path=config_path, download_cell_datsets=False)
