@@ -20,12 +20,15 @@ from src.labels.functional.instance_matching import (
 )
 from src.utils.io.data_structure.files_and_paths.general_path_operations import (
     extract_number_from_week_string,
+    extract_week_from_filepath,
 )
 from src.utils.io.data_structure.files_and_paths.timeseries_metadata import (
     get_subject_roi_label_channel_time_series_info_path,
     get_subject_roi_label_time_series_two_channel_mapping_info_path,
 )
 from src.utils.io.nifti.write_to_nifti import write_to_nifti
+from src.utils.cell_tracking_challenge.ctc_format import write_graph_to_ctc, write_to_tiff
+from utils.common import logging_to_stdout
 
 allowed_modes = ["pairwise", "global"]
 allowed_registration_to = ["first_timepoint", "preceding_timepoint"]
@@ -339,6 +342,38 @@ class InstanceMatcher:
             nib.load(filename=img).get_fdata() for img in unregistered_label_paths
         ]
 
+        # Also make a folder for the ctc results, all the files in this folder are only sym_links to the result files
+        # to not waste memory but still have a folder with the correct format for evaluation locally (not sending to the 
+        # cell tracking challenge). The evaluation software allows only results folder to be present for evaluation e.g.
+        # 01_RES. As we will compare multiple results this is not suited for us so we will sym_link the dataset folders
+        # in a results folder per tested algorithm and dataset.
+        if "Cells_" in subject_id:
+            # Create folder to add files or links
+            ctc_ds_folder = os.path.join(self.config["general"]["result_folder"], "ctc")
+            ctc_sub_id = subject_id.replace("Cells_", "")
+            ctc_sub_RES = os.path.join(ctc_ds_folder, ctc_sub_id + "_RES")
+
+            # Sym_link paths
+            ctc_sub_path_src = os.path.join(self.config["general"]["data_path"], ctc_sub_id)
+            ctc_sub_path_dst = os.path.join(ctc_ds_folder, ctc_sub_id)
+            ctc_sub_ERR_SEG_src = os.path.join(self.config["general"]["data_path"], ctc_sub_id + "_ERR_SEG")
+            ctc_sub_ERR_SEG_dst = os.path.join(ctc_ds_folder, ctc_sub_id + "_ERR_SEG")
+            ctc_sub_GT_src = os.path.join(self.config["general"]["data_path"], ctc_sub_id + "_GT")
+            ctc_sub_GT_dst = os.path.join(ctc_ds_folder, ctc_sub_id + "_GT")
+            ctc_sub_ST_src = os.path.join(self.config["general"]["data_path"], ctc_sub_id + "_ST")
+            ctc_sub_ST_dst = os.path.join(ctc_ds_folder, ctc_sub_id + "_ST")
+
+            # Create the folder in which we add results
+            for p in [ctc_ds_folder, ctc_sub_RES]:
+                os.makedirs(p, exist_ok=True)
+            # Sym_link to the original dataset
+            for p_src, p_dst in zip(
+                [ctc_sub_path_src, ctc_sub_ERR_SEG_src, ctc_sub_GT_src, ctc_sub_ST_src],
+                [ctc_sub_path_dst, ctc_sub_ERR_SEG_dst, ctc_sub_GT_dst, ctc_sub_ST_dst]):
+                if os.path.islink(p_dst):
+                    os.unlink(p_dst)
+                os.symlink(p_src, p_dst)
+
         if self.mode == "global":
             # match the instances
             matches, union_instances, _ = match_instances_by_binary_union(
@@ -391,6 +426,10 @@ class InstanceMatcher:
             )
             os.makedirs(os.path.dirname(graph_path), exist_ok=True)
             nx.write_graphml(graph, graph_path)
+            # Write it in the ctc format for use with their comparison tools.
+            if "Cells_" in subject_id:
+                ctc_graph_path = os.path.join(ctc_sub_RES,"res_track.txt")
+                write_graph_to_ctc(graph, ctc_graph_path)
 
             # apply the lineage matching
             matched_lineage_images = []
@@ -468,6 +507,7 @@ class InstanceMatcher:
             label_setting=label_settings_folder,
         )
         os.makedirs(os.path.dirname(ts_path), exist_ok=True)
+
         print("Folder to save the stats: " + ts_path)
         with open(ts_path, "w") as f:
             f.write(json.dumps(stats_matched_instances, indent=4, sort_keys=True))
@@ -484,13 +524,19 @@ class InstanceMatcher:
 
         # save the matched tcui images
         for idx, img in enumerate(matched_tcui_images):
+            nifti_path = unregistered_label_paths[idx].replace(
+                    "instances.nii.gz", "tracked.nii.gz"
+                )
             write_to_nifti(
                 nifti_data=img,
                 dtype=img.dtype,
-                filename=unregistered_label_paths[idx].replace(
-                    "instances.nii.gz", "tracked.nii.gz"
-                ),
+                filename=nifti_path
             )
+            if "Cells_" in subject_id:
+                timepoint = int(extract_week_from_filepath(nifti_path).replace("_weeks", ""))
+                tiff_path = os.path.join(ctc_sub_RES, f"mask{timepoint:03d}.tif")
+                write_to_tiff(tiff_data=img, filename=tiff_path)
+
 
         # save the meta data
         for idx, img in enumerate(matched_lineage_images):
@@ -616,3 +662,13 @@ class InstanceMatcher:
         with open(b_to_a_path, "w") as f:
             f.write(json.dumps(matches_b_to_a, indent=4, sort_keys=True))
         return matches_a_to_b, matches_b_to_a
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    logging_to_stdout()
+    config_path = "/workspaces/MOLT/data/CellTracking/Fluo-N2DL-HeLa/config.json"
+    config = Config(config_path=config_path)
+    cohort = Cohort(config)
+    im = InstanceMatcher(config=config, cohort=cohort)
+    im.run()

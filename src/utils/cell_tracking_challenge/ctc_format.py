@@ -1,5 +1,7 @@
 from collections import defaultdict
 import networkx as nx
+import tifffile
+import numpy as np
 
 def write_graph_to_ctc(graph: nx.Graph, output_filename):
     """
@@ -40,6 +42,18 @@ def write_graph_to_ctc(graph: nx.Graph, output_filename):
         for tracked_id, B, E in track_info:
             P = parent_info[tracked_id]
             f.write(f"{tracked_id} {B} {E} {P}\n")
+
+def write_to_tiff(tiff_data, filename):
+    """
+    Save a 3D numpy array to a TIFF file.
+
+    Args:
+    tiff_data (np.ndarray): 3D numpy array to save as TIFF.
+    filename (str): Path to the file to save the TIFF to.
+    """
+    # If the data is 3D but z=1, squeeze or reshape to 2D if needed
+    tiff_data = tiff_data.astype(np.uint16)
+    tifffile.imwrite(filename, tiff_data)
 
 # Example usage:
 if __name__ == "__main__":

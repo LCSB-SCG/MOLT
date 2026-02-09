@@ -201,7 +201,7 @@ def extract_week_from_filepath(filepath):
         filepath (str): The filepath to extract the week number from.
 
     Returns:
-        int: The week number or None if no week number was found.
+        str: The week number or None if no week number was found.
     """
     parts = filepath.split(os.sep)
     for part in parts:
