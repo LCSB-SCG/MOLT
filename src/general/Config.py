@@ -3,7 +3,7 @@ import json
 
 
 class Config(MutableMapping):
-    def __init__(self, config_path: dict) -> None:
+    def __init__(self, config_path: str) -> None:
         self.config_path = config_path
         self.load_config()
 

@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import matplotlib as mpl
 import networkx as nx
@@ -30,7 +30,7 @@ config_template = "assets/config_celltracking_template.json"
 
 
 class CellTrackingDataset:
-    def __init__(self, config: Config = None, config_path: str = None):
+    def __init__(self, config: Optional[Config] = None, config_path: Optional[str] = None):
         if config_path is None and config is None:
             raise ValueError("config or config_path must be provided")
         elif config_path is not None and config is not None:
@@ -38,6 +38,7 @@ class CellTrackingDataset:
         if config is not None:
             self.config = config
         else:
+            assert config_path is not None
             self.config = Config(config_path=config_path)
         self.cohort = Cohort(self.config)
 
@@ -64,9 +65,9 @@ class CellTrackingDataset:
             d_set = CellTrackingDataset(config_path=os.path.join(d_path, "config.json"))
             logging.info(f"Structuring dataset {d['name']}")
             d_set.structure_dataset()
-            logging.info("- Extracting tracking files.")
-            d_set.man_track_to_graph_and_lineage()
-            logging.info(f"- Removing unnecessary files.")
+            # logging.info("- Extracting tracking files.")
+            # d_set.man_track_to_graph_and_lineage()
+            # logging.info(f"- Removing unnecessary files.")
             # d_set.remove_original_format_files(dataset_path=d_path)
 
     @staticmethod
@@ -119,13 +120,16 @@ class CellTrackingDataset:
             tracking_path = os.path.join(
                 self.config["general"]["data_path"], f"{sub_id}_GT", "TRA"
             )
+            cellpose_path = os.path.join(
+                self.config["general"]["data_path"], f"{sub_id}_Cellpose"
+            )
 
             # Move the manual tracking file to the sub_id folder
             subject_path = os.path.join(
                 self.config["general"]["data_path"], f"Cells_{sub_id}"
             )
             os.makedirs(subject_path, exist_ok=True)
-            shutil.move(
+            shutil.copy(
                 src=os.path.join(tracking_path, "man_track.txt"),
                 dst=os.path.join(subject_path, "man_track_001.txt"),
             )
@@ -139,6 +143,22 @@ class CellTrackingDataset:
                 load_tracking_path = os.path.join(
                     tracking_path, f"man_track{idx:03d}.tif"
                 )
+                if os.path.exists(cellpose_path):
+                    load_cellpose_path = os.path.join(cellpose_path, f"mask{idx:03d}.tif")
+                else:
+                    load_cellpose_path = ""
+
+                # Create the nifti paths
+                out_orig_img_path = os.path.join(
+                    self.config["general"]["data_path"],
+                    name,
+                    f"{idx}_weeks",
+                    "nifti",
+                    "001",
+                    "channel_1",
+                    "1901_01_01_001_channel_1.nii.gz",
+                )
+                
                 out_gt_seg_path = os.path.join(
                     self.config["general"]["data_path"],
                     name,
@@ -159,38 +179,64 @@ class CellTrackingDataset:
                     "manual",
                     "1901_01_01_001_binary.nii.gz",
                 )
-                out_orig_img_path = os.path.join(
-                    self.config["general"]["data_path"],
-                    name,
-                    f"{idx}_weeks",
-                    "nifti",
-                    "001",
-                    "channel_1",
-                    "1901_01_01_001_channel_1.nii.gz",
-                )
+                
+                if os.path.exists(cellpose_path):
+                    out_cellpose_path = os.path.join(
+                        self.config["general"]["data_path"],
+                        name,
+                        f"{idx}_weeks",
+                        "label",
+                        "001",
+                        "channel_1",
+                        "cellpose",
+                        "1901_01_01_001_instances.nii.gz",
+                    )
+                    out_cellpose_bin_path = os.path.join(
+                        self.config["general"]["data_path"],
+                        name,
+                        f"{idx}_weeks",
+                        "label",
+                        "001",
+                        "channel_1",
+                        "cellpose_bin",
+                        "1901_01_01_001_binary.nii.gz",
+                    )
+                else:
+                    out_cellpose_path = ""
+                    out_cellpose_bin_path = ""
+                    
                 os.makedirs(os.path.dirname(out_gt_seg_path), exist_ok=True)
                 os.makedirs(os.path.dirname(out_bin_seg_path), exist_ok=True)
                 os.makedirs(os.path.dirname(out_orig_img_path), exist_ok=True)
+                if os.path.exists(cellpose_path):
+                    os.makedirs(os.path.dirname(out_cellpose_path), exist_ok=True)
+                    os.makedirs(os.path.dirname(out_cellpose_bin_path), exist_ok=True)
 
                 # Load and save the original image
                 img = self.load_tiff_image(load_tiff_path)
                 write_to_nifti(
                     nifti_data=img, dtype=np.float32, filename=out_orig_img_path
                 )
+                
 
+                # We will process 1. ground truth annotions and 2. automatic segmentations for cellpose
+                # 1. to test the performance of the algorithm without the influence of the segmentation performance
+                # 2. to test the performance of the algorithm with the influence of the segmentation erros from automatic segmentations, which is more similar to the real use case of the algorithm
+                
+                # 1.
                 # Load and save the ground truth segmentation
                 # The segmentations are not complete and the missing instances (that are in the tacked images)
                 # are filled in from the tracking blob segmentation (threfore not really segmenting the whole instance)
                 gt_seg = self.load_tiff_image(load_seg_path)
                 gt_tracking = self.load_tiff_image(load_tracking_path)
                 corrected_gt_seg = np.zeros_like(gt_seg)
-                gt_seg_unique = np.unique(gt_seg)
+                gt_seg_unique = np.unique(gt_seg) # type: ignore
                 for i in gt_seg_unique:
                     if i == 0:
                         continue
                     mask = gt_seg == i
                     corrected_gt_seg[mask] = i
-                for i in np.unique(gt_tracking):
+                for i in np.unique(gt_tracking): # type: ignore
                     if i in gt_seg_unique:
                         continue
                     mask = gt_tracking == i
@@ -211,50 +257,73 @@ class CellTrackingDataset:
                 )
 
                 # also save as binary and eroded for input to the tracking
-                if erosion:
-                    # upscale the image resolution by factor of 3
-                    # img_array = ndimage.zoom(img_array, zoom=(2, 2))
+                new_img = self._process_segmentation(
+                    corrected_gt_seg, 
+                    apply_erosion=erosion, 
+                    apply_vol_filter=vol_filter
+                )
 
-                    # binary erosion on each instance
-                    new_img = np.zeros_like(corrected_gt_seg)
-
-                    for i in np.unique(corrected_gt_seg):
-                        if i == 0:
-                            continue
-                        mask = corrected_gt_seg == i
-                        label, num_cc = ndimage.label(mask)
-                        if num_cc > 1 and vol_filter:
-                            # if component already split in gt, take only the largest connected component
-                            largest_cc = np.argmax(np.bincount(label.flat)[1:]) + 1
-                            mask = (label == largest_cc).astype(np.uint8)
-
-                        for errosion_step in range(1):
-                            new_mask = ndimage.binary_erosion(
-                                mask, iterations=1
-                            ).astype(np.uint8)
-                            # check if the mask is empty
-                            if np.sum(new_mask) == 0:
-                                break
-                            # the component should not be split by the erosion
-                            label, num_cc = ndimage.label(new_mask)
-                            if num_cc > 1:
-                                # take only the largest component
-                                largest_cc = np.argmax(np.bincount(label.flat)[1:]) + 1
-                                new_mask = (label == largest_cc).astype(np.uint8)
-                            mask = new_mask
-                        new_img += mask
-                else:
-                    new_img = gt_seg
-                new_img[new_img > 0] = 1  # Convert to binary
                 write_to_nifti(
                     nifti_data=new_img, dtype=np.float32, filename=out_bin_seg_path
                 )
+
+                # 2. Load and save the cellpose segmentation if exists
+                if os.path.exists(cellpose_path):
+                    cellpose_seg = self.load_tiff_image(load_cellpose_path)
+                    write_to_nifti(
+                        nifti_data=cellpose_seg,
+                        dtype=np.float32,
+                        filename=out_cellpose_path,
+                    )
+                    cellpose_bin = self._process_segmentation(
+                        cellpose_seg, apply_erosion=erosion, apply_vol_filter=vol_filter
+                    )
+                    write_to_nifti(
+                        nifti_data=cellpose_bin,
+                        dtype=np.float32,
+                        filename=out_cellpose_bin_path,
+                    )
+
                 logging.info(
                     f"Processed {name} {idx} {load_tiff_path} -> {out_orig_img_path}"
                 )
         logging.info(
             f"Finished structuring dataset. Found {issue_counter} issues with tracking instances overlapping with ground truth instances."
         )
+
+    def _process_segmentation(self, seg, apply_erosion=True, apply_vol_filter=True):
+        if apply_erosion:
+            new_img = np.zeros_like(seg)
+
+            for i in np.unique(seg):
+                if i == 0:
+                    continue
+                mask = seg == i
+                label, num_cc = ndimage.label(mask)  # type: ignore
+                if num_cc > 1 and apply_vol_filter:
+                    # if component already split in gt, take only the largest connected component
+                    largest_cc = np.argmax(np.bincount(label.flat)[1:]) + 1
+                    mask = (label == largest_cc).astype(np.uint8)
+
+                for errosion_step in range(1):
+                    new_mask = ndimage.binary_erosion(
+                        mask, iterations=1
+                    ).astype(np.uint8)
+                    # check if the mask is empty
+                    if np.sum(new_mask) == 0:
+                        break
+                    # the component should not be split by the erosion
+                    label, num_cc = ndimage.label(new_mask) # type: ignore
+                    if num_cc > 1:
+                        # take only the largest component
+                        largest_cc = np.argmax(np.bincount(label.flat)[1:]) + 1
+                        new_mask = (label == largest_cc).astype(np.uint8)
+                    mask = new_mask
+                new_img += mask
+        else:
+            new_img = seg
+        new_img[new_img > 0] = 1  # Convert to binary
+        return new_img
 
     def associate_tracked_instances_with_gt(self):
         # Placeholder for ground truth collection logic
@@ -981,7 +1050,7 @@ class CellTrackingDataset:
         avg_idf1 = 0
         s_r_counter = 0
         for subject in self.cohort.get_subjects():
-            metric_file = self.config.config_path.replace("config.json", "")
+            metric_file = self.config["general"]["result_folder"]
             metric_file = os.path.join(metric_file, subject, "metrics.txt")
             logging.info(f"Saving metrics to {metric_file}")
             for roi in self.cohort.get_subject_rois(subject_id=subject):
@@ -1014,6 +1083,7 @@ class CellTrackingDataset:
                         "-----------------------------------------------------------------\n"
                     )
                     f.write(f"Metrics for ROI {roi}:\n")
+                    f.write(f"IDF1 Score: {idf1}\n")
                     f.write(f"Accuracy: {acc}\n")
                     f.write("Counts:\n")
                     for key, value in counts.items():
@@ -1245,4 +1315,7 @@ class CellTrackingDataset:
 
 
 if __name__ == "__main__":
+    from src.utils.common import logging_to_stdout
+    logging.basicConfig(level=logging.INFO)
+    logging_to_stdout()
     CellTrackingDataset.setup_datasets()

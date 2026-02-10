@@ -1,0 +1,7 @@
+name: cellpose
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - matplotlib
+prefix: /home/benimeni/miniconda3/envs/cellpose
