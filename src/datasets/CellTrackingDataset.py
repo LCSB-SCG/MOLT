@@ -23,6 +23,7 @@ from src.utils.io.nifti.write_to_nifti import write_to_nifti
 import zipfile
 import shutil
 import logging
+from scipy import ndimage
 
 dl_dir = "tmp_downloads"
 data_dir = "data"
@@ -114,9 +115,6 @@ class CellTrackingDataset:
         for sub_id in sub_ids:
             name = f"Cells_{sub_id}"
             tiff_path = os.path.join(self.config["general"]["data_path"], sub_id)
-            seg_path = os.path.join(
-                self.config["general"]["data_path"], f"{sub_id}_ST", "SEG"
-            )
             tracking_path = os.path.join(
                 self.config["general"]["data_path"], f"{sub_id}_GT", "TRA"
             )
@@ -139,7 +137,6 @@ class CellTrackingDataset:
             logging.info("Number of files: ", str(num_files))
             for idx in range(0, num_files):
                 load_tiff_path = os.path.join(tiff_path, f"t{idx:03d}.tif")
-                load_seg_path = os.path.join(seg_path, f"man_seg{idx:03d}.tif")
                 load_tracking_path = os.path.join(
                     tracking_path, f"man_track{idx:03d}.tif"
                 )
@@ -224,41 +221,17 @@ class CellTrackingDataset:
                 # 2. to test the performance of the algorithm with the influence of the segmentation erros from automatic segmentations, which is more similar to the real use case of the algorithm
                 
                 # 1.
-                # Load and save the ground truth segmentation
-                # The segmentations are not complete and the missing instances (that are in the tacked images)
-                # are filled in from the tracking blob segmentation (threfore not really segmenting the whole instance)
-                gt_seg = self.load_tiff_image(load_seg_path)
+                # Load and save the ground truth tracking (these are not full segmentations)
                 gt_tracking = self.load_tiff_image(load_tracking_path)
-                corrected_gt_seg = np.zeros_like(gt_seg)
-                gt_seg_unique = np.unique(gt_seg) # type: ignore
-                for i in gt_seg_unique:
-                    if i == 0:
-                        continue
-                    mask = gt_seg == i
-                    corrected_gt_seg[mask] = i
-                for i in np.unique(gt_tracking): # type: ignore
-                    if i in gt_seg_unique:
-                        continue
-                    mask = gt_tracking == i
-                    if corrected_gt_seg[mask].sum() > 0:
-                        # be sure the segmentations are distinct
-                        logging.info(
-                            f"Tracking instance {i} overlaps with existing ground truth instance in {load_seg_path}"
-                        )
-                        issue_counter += 1
-                    else:
-                        corrected_gt_seg[mask] = i
-
-                # Save the corrected ground truth segmentation
                 write_to_nifti(
-                    nifti_data=corrected_gt_seg,
+                    nifti_data=gt_tracking,
                     dtype=np.float32,
                     filename=out_gt_seg_path,
                 )
 
                 # also save as binary and eroded for input to the tracking
                 new_img = self._process_segmentation(
-                    corrected_gt_seg, 
+                    gt_tracking, 
                     apply_erosion=erosion, 
                     apply_vol_filter=vol_filter
                 )
@@ -291,39 +264,38 @@ class CellTrackingDataset:
             f"Finished structuring dataset. Found {issue_counter} issues with tracking instances overlapping with ground truth instances."
         )
 
+
     def _process_segmentation(self, seg, apply_erosion=True, apply_vol_filter=True):
-        if apply_erosion:
-            new_img = np.zeros_like(seg)
+        if not apply_erosion:
+            return (seg > 0).astype(np.uint8)
 
-            for i in np.unique(seg):
-                if i == 0:
-                    continue
-                mask = seg == i
-                label, num_cc = ndimage.label(mask)  # type: ignore
-                if num_cc > 1 and apply_vol_filter:
-                    # if component already split in gt, take only the largest connected component
-                    largest_cc = np.argmax(np.bincount(label.flat)[1:]) + 1
-                    mask = (label == largest_cc).astype(np.uint8)
+        new_img = np.zeros_like(seg)
+        for i in np.unique(seg):
+            if i == 0:
+                continue
+            mask = seg == i
 
-                for errosion_step in range(1):
-                    new_mask = ndimage.binary_erosion(
-                        mask, iterations=1
-                    ).astype(np.uint8)
-                    # check if the mask is empty
+            # Check if this instance touches any other instance (8-connected in 2D, 26-connected in 3D)
+            dilated_mask = ndimage.binary_dilation(mask, structure=np.ones((3,)*seg.ndim))
+            touches_other = np.any((dilated_mask & (seg != 0) & (seg != i)))
+
+            if touches_other:
+                # Apply erosion only if touching another instance
+                for _ in range(1):
+                    new_mask = ndimage.binary_erosion(mask, iterations=1).astype(np.uint8)
                     if np.sum(new_mask) == 0:
                         break
-                    # the component should not be split by the erosion
-                    label, num_cc = ndimage.label(new_mask) # type: ignore
-                    if num_cc > 1:
-                        # take only the largest component
+                    # Ensure the eroded mask remains a single connected component
+                    label, num_cc = ndimage.label(new_mask)
+                    if num_cc > 1 and apply_vol_filter:
                         largest_cc = np.argmax(np.bincount(label.flat)[1:]) + 1
                         new_mask = (label == largest_cc).astype(np.uint8)
                     mask = new_mask
-                new_img += mask
-        else:
-            new_img = seg
+            new_img += mask
+
         new_img[new_img > 0] = 1  # Convert to binary
         return new_img
+
 
     def associate_tracked_instances_with_gt(self):
         # Placeholder for ground truth collection logic
