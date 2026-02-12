@@ -1,0 +1,43 @@
+- Labeling: 
+  - Method: Label Image Detector # For loading pre-segmented structures
+  - Thresholding: None
+- Tacking:
+  - LAP Tracker:
+    - max frame gap: 2
+    - alternative linking cost factor: 1.05
+    - linking feature penalties: 
+    - linking max distance: 15.0
+    - gap closing max distance: 15.0
+    - merging feature penalties: 
+    - splitting max distance: 15.0
+    - blocking value: Infinity
+    - allow gap closing: true
+    - allow track splitting: false
+    - allow track merging: false
+    - merging max distance: 15.0
+    - splitting feature penalties: 
+    - cutoff percentile: 0.9
+    - gap closing feature penalties: 
+
+  - Advanced Kalman Tracker:
+    - max frame gap: 2
+    - alternative linking cost factor: 1.05
+    - kalman search radius: 20.0
+    - linking feature penalties: 
+    - linking max distance: 15.0
+    - gap closing max distance: 15.0
+    - merging feature penalties: 
+    - splitting max distance: 15.0
+    - blocking value: Infinity
+    - allow gap closing: false
+    - allow track splitting: false
+    - allow track merging: false
+    - merging max distance: 15.0
+    - splitting feature penalties: 
+    - cutoff percentile: 0.9
+    - gap closing feature penalties:
+
+  - Overlap Tracker:
+    - iou calculation: PRECISE
+    - scale factor: 1.0
+    - min iou: 0.3
