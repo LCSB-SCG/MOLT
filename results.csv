@@ -1,13 +1,23 @@
 tracker,dataset,subset,Segmentation,TRA,Best Model
-ours,Fluo-N2DH-GOWT1,01,Ground Truth - Tracking only,0.999259,ours
-LAP Tracker,Fluo-N2DH-GOWT1,01,Ground Truth - Tracking only,0.995620,
-Overlap,Fluo-N2DH-GOWT1,01,Ground Truth - Tracking only,0.992320,
-Kalman,Fluo-N2DH-GOWT1,01,Ground Truth - Tracking only,0.996953,
+ours,Fluo-N2DH-GOWT1,01,Ground Truth - Tracking Dots,0.999259,ours
+LAP Tracker,Fluo-N2DH-GOWT1,01,Ground Truth - Tracking Dots,0.995620,
+Overlap,Fluo-N2DH-GOWT1,01,Ground Truth - Tracking Dots,0.992320,
+Kalman,Fluo-N2DH-GOWT1,01,Ground Truth - Tracking Dots,0.996953,
 ,,,,,
-ours,Fluo-N2DH-GOWT1,02,Ground Truth - Tracking only,0.999100,ours
-LAP Tracker,Fluo-N2DH-GOWT1,02,Ground Truth - Tracking only,0.992139,
-Overlap,Fluo-N2DH-GOWT1,02,Ground Truth - Tracking only,0.984123,
-Kalman,Fluo-N2DH-GOWT1,02,Ground Truth - Tracking only,0.992295,
+ours,Fluo-N2DH-GOWT1,02,Ground Truth - Tracking Dots,0.999100,ours
+LAP Tracker,Fluo-N2DH-GOWT1,02,Ground Truth - Tracking Dots,0.992139,
+Overlap,Fluo-N2DH-GOWT1,02,Ground Truth - Tracking Dots,0.984123,
+Kalman,Fluo-N2DH-GOWT1,02,Ground Truth - Tracking Dots,0.992295,
+,,,,,
+ours,Fluo-N2DH-GOWT1,01,Ground Truth - Silver Truth Seg,,
+LAP Tracker,Fluo-N2DH-GOWT1,01,Ground Truth - Silver Truth Seg,0.994668,
+Overlap,Fluo-N2DH-GOWT1,01,Ground Truth - Silver Truth Seg,0.993759,
+Kalman,Fluo-N2DH-GOWT1,01,Ground Truth - Silver Truth Seg,0.994520,
+,,,,,
+ours,Fluo-N2DH-GOWT1,02,Ground Truth - Silver Truth Seg,,
+LAP Tracker,Fluo-N2DH-GOWT1,02,Ground Truth - Silver Truth Seg,0.905049,
+Overlap,Fluo-N2DH-GOWT1,02,Ground Truth - Silver Truth Seg,0.906192,
+Kalman,Fluo-N2DH-GOWT1,02,Ground Truth - Silver Truth Seg,0.905447,
 ,,,,,
 ours,Fluo-N2DH-GOWT1,01,Cellpose-Sam,0.982461,ours
 LAP Tracker,Fluo-N2DH-GOWT1,01,Cellpose-Sam,0.981255,
@@ -18,16 +28,26 @@ ours,Fluo-N2DH-GOWT1,02,Cellpose-Sam,0.940439,ours
 LAP Tracker,Fluo-N2DH-GOWT1,02,Cellpose-Sam,0.937271,
 Overlap,Fluo-N2DH-GOWT1,02,Cellpose-Sam,0.939712,
 Kalman,Fluo-N2DH-GOWT1,02,Cellpose-Sam,0.937998,
--,-,-,-,-,-
-ours,Fluo-N2DL-HeLa,01,Ground Truth - Tracking only,0.994936,ours
-LAP Tracker,Fluo-N2DL-HeLa,01,Ground Truth - Tracking only,0.993399,
-Overlap,Fluo-N2DL-HeLa,01,Ground Truth - Tracking only,0.915613,
-Kalman,Fluo-N2DL-HeLa,01,Ground Truth - Tracking only,0.993500,
+----------,---------------,----,----------------------,------,-----------
+ours,Fluo-N2DL-HeLa,01,Ground Truth - Tracking Dots,0.994936,ours
+LAP Tracker,Fluo-N2DL-HeLa,01,Ground Truth - Tracking Dots,0.993399,
+Overlap,Fluo-N2DL-HeLa,01,Ground Truth - Tracking Dots,0.915613,
+Kalman,Fluo-N2DL-HeLa,01,Ground Truth - Tracking Dots,0.993500,
 ,,,,,
-ours,Fluo-N2DL-HeLa,02,Ground Truth - Tracking only,0.987882,
-LAP Tracker,Fluo-N2DL-HeLa,02,Ground Truth - Tracking only,0.993220,
-Overlap,Fluo-N2DL-HeLa,02,Ground Truth - Tracking only,0.866656,
-Kalman,Fluo-N2DL-HeLa,02,Ground Truth - Tracking only,0.993977,Kalman
+ours,Fluo-N2DL-HeLa,02,Ground Truth - Tracking Dots,0.987882,
+LAP Tracker,Fluo-N2DL-HeLa,02,Ground Truth - Tracking Dots,0.993220,
+Overlap,Fluo-N2DL-HeLa,02,Ground Truth - Tracking Dots,0.866656,
+Kalman,Fluo-N2DL-HeLa,02,Ground Truth - Tracking Dots,0.993977,Kalman
+,,,,,
+ours,Fluo-N2DL-HeLa,01,Ground Truth - Silver Truth Seg,,
+LAP Tracker,Fluo-N2DL-HeLa,01,Ground Truth - Silver Truth Seg,0.989202,
+Overlap,Fluo-N2DL-HeLa,01,Ground Truth - Silver Truth Seg,0.975920,
+Kalman,Fluo-N2DL-HeLa,01,Ground Truth - Silver Truth Seg,0.989162,
+,,,,,
+ours,Fluo-N2DL-HeLa,02,Ground Truth - Silver Truth Seg,,
+LAP Tracker,Fluo-N2DL-HeLa,02,Ground Truth - Silver Truth Seg,0.993401,
+Overlap,Fluo-N2DL-HeLa,02,Ground Truth - Silver Truth Seg,0.982617,
+Kalman,Fluo-N2DL-HeLa,02,Ground Truth - Silver Truth Seg,0.993304,
 ,,,,,
 ours,Fluo-N2DL-HeLa,01,Cellpose-Sam,0.931157,ours
 LAP Tracker,Fluo-N2DL-HeLa,01,Cellpose-Sam,0.929524,
@@ -38,16 +58,26 @@ ours,Fluo-N2DL-HeLa,02,Cellpose-Sam,0.951703,ours
 LAP Tracker,Fluo-N2DL-HeLa,02,Cellpose-Sam,0.951516,
 Overlap,Fluo-N2DL-HeLa,02,Cellpose-Sam,0.938483,
 Kalman,Fluo-N2DL-HeLa,02,Cellpose-Sam,0.951341,
--,-,-,-,-,-
-ours,PhC-C2DL-PSC,01,Ground Truth - Tracking only,0.991088,ours
-LAP Tracker,PhC-C2DL-PSC,01,Ground Truth - Tracking only,0.985662,
-Overlap,PhC-C2DL-PSC,01,Ground Truth - Tracking only,0.943856,
-Kalman,PhC-C2DL-PSC,01,Ground Truth - Tracking only,0.985509,
+----------,---------------,----,----------------------,------,-----------
+ours,PhC-C2DL-PSC,01,Ground Truth - Tracking Dots,0.991088,ours
+LAP Tracker,PhC-C2DL-PSC,01,Ground Truth - Tracking Dots,0.985662,
+Overlap,PhC-C2DL-PSC,01,Ground Truth - Tracking Dots,0.943856,
+Kalman,PhC-C2DL-PSC,01,Ground Truth - Tracking Dots,0.985509,
 ,,,,,
-ours,PhC-C2DL-PSC,02,Ground Truth - Tracking only,0.989635,
-LAP Tracker,PhC-C2DL-PSC,02,Ground Truth - Tracking only,0.998160,Lap Tracker
-Overlap,PhC-C2DL-PSC,02,Ground Truth - Tracking only,0.948939,
-Kalman,PhC-C2DL-PSC,02,Ground Truth - Tracking only,0.998067,
+ours,PhC-C2DL-PSC,02,Ground Truth - Tracking Dots,0.989635,
+LAP Tracker,PhC-C2DL-PSC,02,Ground Truth - Tracking Dots,0.998160,Lap Tracker
+Overlap,PhC-C2DL-PSC,02,Ground Truth - Tracking Dots,0.948939,
+Kalman,PhC-C2DL-PSC,02,Ground Truth - Tracking Dots,0.998067,
+,,,,,
+ours,PhC-C2DL-PSC,01,Ground Truth - Silver Truth Seg,,
+LAP Tracker,PhC-C2DL-PSC,01,Ground Truth - Silver Truth Seg,0.988132,
+Overlap,PhC-C2DL-PSC,01,Ground Truth - Silver Truth Seg,0.987144,
+Kalman,PhC-C2DL-PSC,01,Ground Truth - Silver Truth Seg,0.982889,
+,,,,,
+ours,PhC-C2DL-PSC,02,Ground Truth - Silver Truth Seg,,
+LAP Tracker,PhC-C2DL-PSC,02,Ground Truth - Silver Truth Seg,non consistent tracks,
+Overlap,PhC-C2DL-PSC,02,Ground Truth - Silver Truth Seg,non consistent tracks,
+Kalman,PhC-C2DL-PSC,02,Ground Truth - Silver Truth Seg,non consistent tracks,
 ,,,,,
 ours,PhC-C2DL-PSC,01,Cellpose-Sam,0.923641,
 LAP Tracker,PhC-C2DL-PSC,01,Cellpose-Sam,0.951516,

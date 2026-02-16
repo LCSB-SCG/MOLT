@@ -59,7 +59,7 @@ class CellTrackingDataset:
             "name": "PhC-C2DL-PSC",
         }
         datasets = [d1, d2, d3]
-        CellTrackingDataset.download_datasets(datasets)
+        # CellTrackingDataset.download_datasets(datasets)
 
         for d in datasets:
             d_path = os.path.join("data", "CellTracking", d["name"])
@@ -118,6 +118,10 @@ class CellTrackingDataset:
             tracking_path = os.path.join(
                 self.config["general"]["data_path"], f"{sub_id}_GT", "TRA"
             )
+            seg_path = os.path.join(
+                self.config["general"]["data_path"], f"{sub_id}_ST", "SEG"
+            )
+
             cellpose_path = os.path.join(
                 self.config["general"]["data_path"], f"{sub_id}_Cellpose"
             )
@@ -140,6 +144,7 @@ class CellTrackingDataset:
                 load_tracking_path = os.path.join(
                     tracking_path, f"man_track{idx:03d}.tif"
                 )
+                load_seg_path = os.path.join(seg_path, f"man_seg{idx:03d}.tif")
                 if os.path.exists(cellpose_path):
                     load_cellpose_path = os.path.join(cellpose_path, f"mask{idx:03d}.tif")
                 else:
@@ -222,7 +227,12 @@ class CellTrackingDataset:
                 
                 # 1.
                 # Load and save the ground truth tracking (these are not full segmentations)
-                gt_tracking = self.load_tiff_image(load_tracking_path)
+                use_tra_img_as_gt = False
+                if use_tra_img_as_gt:
+                    gt_tracking = self.load_tiff_image(load_tracking_path)
+                else: 
+                    gt_tracking = self.load_tiff_image(load_seg_path)
+
                 write_to_nifti(
                     nifti_data=gt_tracking,
                     dtype=np.float32,

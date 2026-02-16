@@ -1,5 +1,6 @@
 import logging
 
+from src.pipelines.PlaqueTrackingPipeline import PlaqueTrackingPipeline
 from src.datasets.CellTrackingDataset import CellTrackingDataset
 from src.general.Config import Config
 from src.pipelines.CellTrackingPipeline import CellTrackingPipeline
@@ -20,6 +21,8 @@ def main(config_path: str, download_cell_datsets: bool = False):
 
     if config["general"]["pipeline"] == "CellTracking":
         CellTrackingPipeline(config).run_pipeline()
+    elif config["general"]["pipeline"] == "PlaqueTracking":
+        PlaqueTrackingPipeline(config).run_pipeline()
     else:
         logging.warning("Pipeline not implemented, please select a correct Pipeline.")
 
