@@ -156,8 +156,20 @@ class Cohort:
         subject_roi_weeks_src = {s: {} for s in subjects}
 
         for s in subjects:
+            # Remove MacOS .DS_Store files
+            subj_path = os.path.join(self.data_path, s)
+            for root, dirs, files in os.walk(subj_path):
+                # Remove .DS_Store files from the current directory
+                for file in files:
+                    if file == '.DS_Store':
+                        os.remove(os.path.join(root, file))
+                # Remove .DS_Store files from subdirectories
+                for dir in dirs:
+                    if dir == '.DS_Store':
+                        os.rmdir(os.path.join(root, dir))
+            
             # gather rois for each subject
-            rois = get_available_rois(subject_folder=os.path.join(self.data_path, s))
+            rois = get_available_rois(subject_folder=subj_path)
             for r in rois:
                 subject_roi_weeks_src[s][r] = {}
                 # collect the instances across channels matching json files for each roi

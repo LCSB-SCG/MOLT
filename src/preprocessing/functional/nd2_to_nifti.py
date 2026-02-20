@@ -214,7 +214,7 @@ def nd2_to_nifti(
             logging.info(filepath)
             if not os.path.exists(os.path.dirname(filepath)):
                 os.makedirs(os.path.dirname(filepath))
-
+            logging.info(f"Writing to nifti: {filepath}")
             write_to_nifti(channel_data, channel_data.dtype, filepath)
 
     metadata_path = os.path.join(os.path.dirname(input_paths[0]), "metadata.json")

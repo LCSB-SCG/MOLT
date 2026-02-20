@@ -30,10 +30,10 @@ class DataPreProcessor:
         logging.info("Replacing spaces with underscores")
         replace_space_with_underscore(path=self.config["general"]["data_path"])
         logging.info("Renaming the files")
-        rename_files(
-            path=self.config["general"]["data_path"],
-            channel_mapping=self.config["general"]["channel_mapping"],
-        )
+        # rename_files(
+        #     path=self.config["general"]["data_path"],
+        #     channel_mapping=self.config["general"]["channel_mapping"],
+        # )
         logging.info("Removing non-nd2 files")
         remove_non_nd2_files(path=self.config["general"]["data_path"])
         logging.info("Removing empty directories")
@@ -172,7 +172,7 @@ class DataPreProcessor:
                 logging.info(f"Processing file {idx + 1}/{len(file_list)}")
                 nd2_to_nifti(
                     data_path=self.config["general"]["data_path"],
-                    input_path=str(input_path),
+                    input_paths=str(input_path),
                     auto_adjust_contrast=self.config["DataPreProcessor"][
                         "auto_adjust_contrast"
                     ],

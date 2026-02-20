@@ -5,7 +5,7 @@ import re
 # Date has the following format: yyyy.mm.dd or yy_mm_dd at the beginning of the file name
 DATE_PATTERN = re.compile(r"\b(\d{4}|\d{2})(\.|\_)(\d{2})(\.|\_)(\d{2})")
 # Pattern for the subject id
-SUBJECT_ID_PATTERN = re.compile(r"\bsubj_(\d){3}\b|Cells|Cells_(\d){2}\b")
+SUBJECT_ID_PATTERN = re.compile(r"\bhen-i(\d){3}\b|\bHEN-I(\d){3}\b|\bsubj_(\d){3}\b|Cells|Cells_(\d){2}\b")
 # Pattern of weeks folder should always be at least one digit followed by "_weeks"
 WEEKS_PATTERN = re.compile(r"\b(\d+)\_weeks\b")
 # Roi consists of a  3-digits number

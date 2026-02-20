@@ -1,0 +1,25 @@
+In the registered images:
+1. Search for blobs with different attributes in the last frame of the time series (at least 3 frames):
+    a. possible emerging: small in last frame
+    b. possible fuse: blobs partially touching
+    c. possible split: blobs very close to each other
+    d. possible vasnishing: can not be done from last frame backwards (needs to be done in inverse order)
+2. Validate morphological changes by comparing with previous frames.
+3. If change is correct, include it in annotation for benchamrk. 
+
+4.Compare with unregistered images to validate if a registration artifcat might have
+caused a morphological change. This can also be done automatically using connnected component analyssi for each 
+individual instance segmentation for each blob.
+
+
+Goal: include at least 20 blobs that for each morhological change. Same blob can be included in more morpholocial
+changes.
+
+
+
+Important:
+This process will result in not including many blobs as not all of them can be looked at due to the number of blobs.
+Also some are gonna be excluded in the process. Therefore this annotation is only there to serve as a benchamrk
+for the tracking process, and should not be used for the biological evaluation. All the included blobs should show a
+evolution that can be explained by the annotator with given certainty (as it is very difficult to manually annotate 
+the data).

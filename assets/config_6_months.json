@@ -1,8 +1,8 @@
 {
     "general": {
-        "data_path": "data/3_months",
-        "result_folder": "results/3_months",
-        "plot_folder": "results/3_months/plots",
+        "data_path": "data/6_months",
+        "result_folder": "results/6_months",
+        "plot_folder": "results/6_months/plots",
         "background_instance": 0,
         "ignore_label": -1,
         "information_sources": [
@@ -21,16 +21,17 @@
             "Alexa 488 water": 2,
             "EYFP": 3,
             "TD": 4
-        }
+        },
+        "pipeline": "PlaqueTracking"
     },
     "DataPreProcessor": {
-        "num_threads": 20,
+        "num_threads": 5,
         "auto_adjust_contrast": false,
         "output_dir": "results/workspace_files",
         "max_num_rois": 5,
         "ref_timepoint": "0_weeks",
-        "x_scale": 0.5,
-        "y_scale": 0.5,
+        "x_scale": 1.0,
+        "y_scale": 1.0,
         "z_scale": 1.0,
         "channel_settings": {
             "channel_1": {
@@ -84,7 +85,7 @@
                 2
             ],
             "ia_image_centers": true,
-            "registration_type": "affine",
+            "registration_type": "deformable",
             "dimensions": 3,
             "only_apply_already_available_registration": false,
             "only_calculate_overlap": false,

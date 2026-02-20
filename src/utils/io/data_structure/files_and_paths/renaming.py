@@ -35,27 +35,32 @@ def rename_week_folders(path: str):
     <week_number>_weeks
     """
     for root, dirs, _ in os.walk(path):
-        for dir in dirs:
-            # if not matches with the subject name
-            if SUBJECT_ID_PATTERN.match(dir):
+        if not SUBJECT_ID_PATTERN.match(root):
                 continue
-            week_id = dir.lower()
-            if "weeks" not in week_id and "week" in week_id:
-                week_id = week_id.replace("week", "weeks")
-            elif week_id == "bl" or week_id == "baseline":
-                week_id = "0_weeks"
+        else:
+            for dir in dirs:
+                # if not matches with the subject name
+                print(f"Renaming {os.path.join(root, dir)}")
+                week_id = dir.lower()
+                print(week_id)
+                print(f"maches: {week_id == 'bl' or week_id == 'baseline'}")
 
-            # insert underscore
-            if "_" not in week_id:
-                week_id = week_id.replace("weeks", "_weeks")
+                if "weeks" not in week_id and "week" in week_id:
+                    week_id = week_id.replace("week", "weeks")
+                elif week_id == "bl" or week_id == "baseline":
+                    week_id = "0_weeks"
 
-            # do temporary renaming to name that differs in more then just case-sensitivity
-            os.rename(os.path.join(root, dir), os.path.join(root, week_id + "_temp"))
+                # insert underscore
+                if "_" not in week_id:
+                    week_id = week_id.replace("weeks", "_weeks")
 
-            # rename to final name
-            os.rename(
-                os.path.join(root, week_id + "_temp"), os.path.join(root, week_id)
-            )
+                # do temporary renaming to name that differs in more then just case-sensitivity
+                os.rename(os.path.join(root, dir), os.path.join(root, week_id + "_temp"))
+
+                # rename to final name
+                os.rename(
+                    os.path.join(root, week_id + "_temp"), os.path.join(root, week_id)
+                )
         for dir in dirs:
             rename_week_folders(os.path.join(root, dir))
 
