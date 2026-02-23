@@ -11,6 +11,7 @@ from src.labels.functional.morphological_graph import (
 )
 from src.labels.functional.instance_labeling import label_instance_ids
 from src.labels.Matches import CrossChannelMatches, Matches
+from src.utils.io.nifti.write_to_nifti import write_to_nifti
 
 
 def _mapping_to_per_img_mapping(
@@ -363,8 +364,11 @@ def match_instances_by_binary_union(
     union_view = np.zeros_like(img_list[0])
     for union_id in union_instances:
         union_view[labels == union_id] = union_id
-    union_view = Image.fromarray(union_view.astype(np.uint8) * 255)
-    union_view.save("union_view.png")
+    if len(union_view.shape) == 2:
+        union_view = Image.fromarray(union_view.astype(np.uint8) * 255)
+        union_view.save("union_view.png")
+    else:
+        write_to_nifti(union_view.astype(np.uint8), dtype=np.uint8, filename="union_view.nii.gz")
 
     m = Matches(background_id=background_instance)
     for img_idx, img in enumerate(img_list):

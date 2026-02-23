@@ -94,13 +94,14 @@ def get_morphological_graph_global_view_mapping(
                             )
                         new_graph.add_edge(current_node, next_node)
                         # set the iou value for the edge
-                        for o_node, iou_value in iou["forward_in_time"][current_node]:
-                            if o_node == next_node:
-                                nx.set_edge_attributes(
-                                    new_graph,
-                                    {(current_node, next_node): {"iou": iou_value}},
-                                )
-                                break
+                        if current_node in iou["forward_in_time"]:
+                            for o_node, iou_value in iou["forward_in_time"][current_node]:
+                                if o_node == next_node:
+                                    nx.set_edge_attributes(
+                                        new_graph,
+                                        {(current_node, next_node): {"iou": iou_value}},
+                                    )
+                                    break
 
     new_graph = enforce_no_merge_split(
         graph=new_graph,

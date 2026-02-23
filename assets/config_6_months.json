@@ -99,5 +99,17 @@
                 ]
             }
         }
+    },
+    "InstanceMatcher": {
+        "max_num_threads": 1,
+        "enforce_no_merge": false,
+        "enforce_no_split": false,
+        "mode": "global",
+        "registration_to": "first_timepoint",
+        "label_settings_per_channel": [
+            {
+                "channel_1": "t_3000.0_s_2_v_0_inf"
+            }
+        ]
     }
 }
