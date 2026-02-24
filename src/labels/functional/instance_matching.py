@@ -176,7 +176,7 @@ def apply_matching(
         matches[unmatched_instance] = ignore_label
 
     # apply the matching
-    matched_image = np.zeros_like(image)
+    matched_image = np.zeros_like(image).astype(np.int32)
     for instance in matches.keys():
         matched_image[image == instance] = matches[instance]
 
@@ -194,6 +194,7 @@ def match_instances_by_pairwise_binary_union(
     enforce_no_merge=False,
     enforce_no_split=False,
 ):
+    logging.info(f"Starting pairwise matching for {len(img_list)} images...")
     m = Matches(background_id=background_instance)
 
     iou_map = {"forward_in_time": {}, "backward_in_time": {}}
@@ -235,8 +236,20 @@ def match_instances_by_pairwise_binary_union(
 
             formated_union_id = f"U_{idx}_{union_id}"
 
+            # Get bounding box around the union instance to reduce memory usage
+            union_mask = labels == union_id
+            bbox = np.array(np.where(union_mask)).T
+            if len(bbox) == 0:
+                continue
+            min_coords = bbox.min(axis=0)
+            max_coords = bbox.max(axis=0) + 1
+            
+            # Crop images to bounding box (much smaller than full image)
+            img_crop = img[tuple(slice(min_coords[i], max_coords[i]) for i in range(img.ndim))]
+            prev_img_crop = prev_img[tuple(slice(min_coords[i], max_coords[i]) for i in range(prev_img.ndim))]
+
             # get the original instances that overlap with the union instance, excluding the background instance
-            original_instances = np.unique(img[labels == union_id])
+            original_instances = np.unique(img_crop[union_mask[tuple(slice(min_coords[i], max_coords[i]) for i in range(img.ndim))]])
             original_instances = [
                 i for i in original_instances if i != background_instance
             ]
@@ -244,7 +257,7 @@ def match_instances_by_pairwise_binary_union(
                 f"{idx}_{original_instance}" for original_instance in original_instances
             ]
 
-            prev_original_instances = np.unique(prev_img[labels == union_id])
+            prev_original_instances = np.unique(prev_img_crop[union_mask[tuple(slice(min_coords[i], max_coords[i]) for i in range(prev_img.ndim))]])
             prev_original_instances = [
                 i for i in prev_original_instances if i != background_instance
             ]
@@ -253,18 +266,13 @@ def match_instances_by_pairwise_binary_union(
                 for prev_original_instance in prev_original_instances
             ]
 
-            if 15 in orig_ids or 15 in prev_orig_ids:
-                logging.info(
-                    f"Union id: {union_id}, orig_ids: {orig_ids}, prev_orig_ids: {prev_orig_ids}"
-                )
-
             # --- calculate the IOU forward in time (IOU is symmetric, backward reuses these values)
             if prev_original_instances == []:
                 iou_map["forward_in_time"][""].extend(orig_ids)
             
-            # Pre-compute all instance masks to avoid repeated computations
-            prev_masks = {poi: prev_img == poi for poi in prev_original_instances}
-            curr_masks = {oi:    img == oi for oi in original_instances}
+            # Pre-compute all instance masks to avoid repeated computations (cropped to bbox)
+            prev_masks = {poi: prev_img_crop == poi for poi in prev_original_instances}
+            curr_masks = {oi:    img_crop == oi for oi in original_instances}
             
             # Vectorized IOU computation: compute all pairs at once
             if prev_original_instances and original_instances:
@@ -318,6 +326,7 @@ def match_instances_by_pairwise_binary_union(
                 m.add_match(old_id=prev_orig_combined_id, new_id=formated_union_id)
 
     # get the final matching
+    logging.info("Computing final matching from connected components...")
     original_ids_to_lineage, original_ids_to_tscui, graph = get_final_matching(
         adjacencies=m.original_to_shared_id,
         global_view_mapping=False,
@@ -327,6 +336,7 @@ def match_instances_by_pairwise_binary_union(
         enforce_no_split=enforce_no_split,
     )
 
+    logging.info(f"Pairwise matching complete. Lineage: {len(original_ids_to_lineage)} instances, TCUI: {len(original_ids_to_tscui)} instances.")
     lineage_mapping = _mapping_to_per_img_mapping(
         original_ids_to_lineage, num_images=len(img_list)
     )
@@ -407,14 +417,29 @@ def match_instances_by_binary_union(
     iou_map["backward_in_time"][""] = [
         f"{len(img_list) - 1}_{i}" for i in np.unique(img_list[-1])
     ]
+    
+    logging.info(f"Calculating IOU for {len(union_instances)} union instances across {len(img_list)} images...")
 
     for idx in range(1, len(img_list)):
+        logging.info(f"Processing image {idx}/{len(img_list)-1} for IOU calculation...")
         prev_img = img_list[idx - 1]
         img = img_list[idx]
 
         for union_id in union_instances:
+            # Get bounding box around the union instance to reduce memory usage
+            union_mask = labels == union_id
+            bbox = np.array(np.where(union_mask)).T
+            if len(bbox) == 0:
+                continue
+            min_coords = bbox.min(axis=0)
+            max_coords = bbox.max(axis=0) + 1
+            
+            # Crop images to bounding box (much smaller than full image)
+            img_crop = img[tuple(slice(min_coords[i], max_coords[i]) for i in range(img.ndim))]
+            prev_img_crop = prev_img[tuple(slice(min_coords[i], max_coords[i]) for i in range(prev_img.ndim))]
+
             # get the original instances that overlap with the union instance, excluding the background instance
-            original_instances = np.unique(img[labels == union_id])
+            original_instances = np.unique(img_crop[union_mask[tuple(slice(min_coords[i], max_coords[i]) for i in range(img.ndim))]])
             original_instances = [
                 i for i in original_instances if i != background_instance
             ]
@@ -422,7 +447,7 @@ def match_instances_by_binary_union(
                 f"{idx}_{original_instance}" for original_instance in original_instances
             ]
 
-            prev_original_instances = np.unique(prev_img[labels == union_id])
+            prev_original_instances = np.unique(prev_img_crop[union_mask[tuple(slice(min_coords[i], max_coords[i]) for i in range(prev_img.ndim))]])
             prev_original_instances = [
                 i for i in prev_original_instances if i != background_instance
             ]
@@ -443,9 +468,9 @@ def match_instances_by_binary_union(
             if prev_original_instances == []:
                 iou_map["forward_in_time"][""].extend(orig_ids)
             
-            # Pre-compute all instance masks to avoid repeated computations
-            prev_masks = {poi: prev_img == poi for poi in prev_original_instances}
-            curr_masks = {oi: img == oi for oi in original_instances}
+            # Pre-compute all instance masks to avoid repeated computations (cropped to bbox)
+            prev_masks = {poi: prev_img_crop == poi for poi in prev_original_instances}
+            curr_masks = {oi: img_crop == oi for oi in original_instances}
             
             # Vectorized IOU computation: compute all pairs at once
             if prev_original_instances and original_instances:
@@ -456,11 +481,11 @@ def match_instances_by_binary_union(
                 intersections = np.logical_and(prev_stack[:, None, ...], curr_stack[None, :, ...])
                 unions = np.logical_or(prev_stack[:, None, ...], curr_stack[None, :, ...])
                 
-                intersection_sums = intersections.reshape(len(prev_original_instances), len(original_instances), -1).sum(axis=2)
-                union_sums = unions.reshape(len(prev_original_instances), len(original_instances), -1).sum(axis=2)
+                intersection = intersections.reshape(len(prev_original_instances), len(original_instances), -1).sum(axis=2)
+                union = unions.reshape(len(prev_original_instances), len(original_instances), -1).sum(axis=2)
                 
                 with np.errstate(divide='ignore', invalid='ignore'):
-                    iou_matrix = intersection_sums / union_sums
+                    iou_matrix = intersection / union
                     iou_matrix = np.nan_to_num(iou_matrix, nan=0.0)
                 
                 for p_idx, (poi, poi_id) in enumerate(zip(prev_original_instances, prev_orig_ids)):
@@ -490,6 +515,7 @@ def match_instances_by_binary_union(
     # if an instance is split due to the registration (either the connection of two parts of that instance is cut
     # by the registration or vanished due to interpolation if connection was small) it can lead to the same orignal
     # instance being matched to multiple instances in the union image
+    logging.info("Computing final matching from connected components (global view)...")
     original_ids_to_lineage, original_ids_to_tcui, morphological_graph = (
         get_final_matching(
             m.original_to_shared_id,
@@ -501,6 +527,7 @@ def match_instances_by_binary_union(
         )
     )
 
+    logging.info(f"Global matching complete. Lineage: {len(original_ids_to_lineage)} instances, TCUI: {len(original_ids_to_tcui)} instances.")
     lineage_mapping = _mapping_to_per_img_mapping(
         original_ids_to_lineage, num_images=len(img_list)
     )
@@ -555,6 +582,7 @@ def match_instances_by_intersection_of_two_images(
         match_a_to_b: A  with the mapping from the instances in the first image a to the instances in the second image b.
         match_b_to_a: A dictionary with the mapping from the instances in the second image b to the instances in the first image a.
     """
+    logging.info(f"Matching instances by intersection: channel {channel_id_a} vs {channel_id_b}...")
     cross_channel_matches = CrossChannelMatches(
         channel_a_id=channel_id_a, channel_b_id=channel_id_b
     )
@@ -596,6 +624,7 @@ def match_instances_by_intersection_of_two_images(
                 continue
             cross_channel_matches.add_match(instance_a, instance_b)
 
+    logging.info(f"Cross-channel matching complete. Found {len(cross_channel_matches.a_to_b)} matches from A to B.")
     return cross_channel_matches
 
 

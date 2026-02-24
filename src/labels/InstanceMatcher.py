@@ -83,9 +83,13 @@ class InstanceMatcher:
         Runs the matching algorithm to match instances in the same channel labels over time for each region of
         interest of each subject in the cohort.
         """
+
         # run the per instance tracking with the same channel
         if "label_settings_per_channel" in self.config["InstanceMatcher"]:
+            logging.info("Collecting matching tasks...")
             matchings_to_run = self._collect_matching_tasks()
+
+            logging.info(f"Running per-instance tracking for {len(matchings_to_run)} tasks...")
 
             # split the task into chunks
             matchings_per_thread = np.array_split(
@@ -106,10 +110,12 @@ class InstanceMatcher:
                 # Wait for all threads to finish
                 t.join()
 
+        logging.info("Updating cohort data...")
         self.cohort.update_data()
 
         # run the across channel matching
         if "across_channel_matching_settings" in self.config["InstanceMatcher"]:
+            logging.info("Collecting across channel matching tasks...")
             across_channel_matchings_to_run = (
                 self._collect_across_channel_matching_tasks()
             )
@@ -134,6 +140,10 @@ class InstanceMatcher:
             for t in self.threads:
                 # Wait for all threads to finish
                 t.join()
+
+            logging.info(f"Running across channel matching for {len(across_channel_matchings_to_run)} tasks...")
+
+        logging.info("Instance matching complete.")
 
     def _run_thread(self, match_tasks_for_thread: list[dict]):
         """
@@ -343,13 +353,15 @@ class InstanceMatcher:
             list[np.ndarray]: The matched images.
 
         """
-        # load the images
+        # load the images as uint16 to save memory
+        logging.info(f"Loading images for {subject_id} - {roi} - {channel_id}...")
         registered_instance_imgs = [
-            nib.load(filename=img).get_fdata() for img in registered_label_paths
+            nib.load(filename=img).get_fdata().astype(np.uint16) for img in registered_label_paths
         ]
         unregistered_instance_imgs = [
-            nib.load(filename=img).get_fdata() for img in unregistered_label_paths
+            nib.load(filename=img).get_fdata().astype(np.uint16) for img in unregistered_label_paths
         ]
+        logging.info(f"Loaded {len(registered_instance_imgs)} registered and {len(unregistered_instance_imgs)} unregistered images.")
 
         # Also make a folder for the ctc results, all the files in this folder are only sym_links to the result files
         # to not waste memory but still have a folder with the correct format for evaluation locally (not sending to the 
@@ -382,12 +394,14 @@ class InstanceMatcher:
                 os.symlink(p_src, p_dst)
 
         if self.mode == "global":
+            logging.info(f"Running global matching for {subject_id} - {roi} - {channel_id}...")
             # match the instances
             matches, union_instances, _ = match_instances_by_binary_union(
                 img_list=registered_instance_imgs,
                 background_instance=self.config["general"]["background_instance"],
             )
 
+            logging.info("Applying matches to lineage images...")
             if self.save_union_view:
                 write_to_nifti(
                     nifti_data=union_instances,
@@ -413,6 +427,7 @@ class InstanceMatcher:
             matched_tcui_images = []
         else:
             # pairwise matching
+            logging.info(f"Running pairwise matching for {subject_id} - {roi} - {channel_id}...")
             lineage_mapping, tcui_mapping, graph = (
                 match_instances_by_pairwise_binary_union(
                     img_list=registered_instance_imgs,
@@ -467,6 +482,7 @@ class InstanceMatcher:
         # Validation removed for performance optimization
 
         if self.collect_stats:
+            logging.info(f"Collecting stats for {subject_id} - {roi} - {channel_id}...")
             stats_matched_instances = collect_vams_information_for_matched_ids(
                 matched_images=matched_lineage_images,
                 original_images=unregistered_instance_imgs,
@@ -487,6 +503,7 @@ class InstanceMatcher:
                 f.write(json.dumps(stats_matched_instances, indent=4, sort_keys=True))
 
         if self.save_lineage_images:
+            logging.info(f"Saving lineage images for {subject_id} - {roi} - {channel_id}...")
             for idx, img in enumerate(matched_lineage_images):
                 write_to_nifti(
                     nifti_data=img,
@@ -495,8 +512,10 @@ class InstanceMatcher:
                         "instances.nii.gz", "lineage.nii.gz"
                     ),
                 )
+                logging.info(f"Saved lineage image to {unregistered_label_paths[idx].replace('instances.nii.gz', 'lineage.nii.gz')}")
 
         if self.save_tracked_images:
+            logging.info(f"Saving tracked images for {subject_id} - {roi} - {channel_id}...")
             for idx, img in enumerate(matched_tcui_images):
                 nifti_path = unregistered_label_paths[idx].replace(
                         "instances.nii.gz", "tracked.nii.gz"
@@ -506,6 +525,7 @@ class InstanceMatcher:
                     dtype=img.dtype,
                     filename=nifti_path
                 )
+                logging.info(f"Saved tracked image to {nifti_path}")
                 if self.write_ctc_format:
                     timepoint = int(extract_week_from_filepath(nifti_path).replace("_weeks", ""))
                     tiff_path = os.path.join(ctc_sub_RES, f"mask{timepoint:03d}.tif")
@@ -513,6 +533,7 @@ class InstanceMatcher:
 
 
         if self.save_metadata:
+            logging.info(f"Saving metadata for {subject_id} - {roi} - {channel_id}...")
             for idx, img in enumerate(matched_lineage_images):
                 meta_data = collect_meta_data(img)
                 meta_path = unregistered_label_paths[idx].replace(
@@ -552,6 +573,8 @@ class InstanceMatcher:
             assert len(week_numbers) == len(images_channel_a)
         else:
             week_numbers = list(range(len(images_channel_a)))
+
+        logging.info(f"Running across channel matching for {subject_id} - {roi} - {channel_id_a} vs {channel_id_b}...")
 
         matches_a_to_b = {}  # channel_a_instance_id: {
         #     "matched_instances_channel_b_per_week": [[#channel_b_ids]],
@@ -607,6 +630,7 @@ class InstanceMatcher:
                 matches_b_to_a[instance_b]["week_numbers"].append(week_numbers[idx])
 
         # save the matches to json files
+        logging.info(f"Saving across channel matching results for {subject_id} - {roi}...")
         a_to_b_path = get_subject_roi_label_time_series_two_channel_mapping_info_path(
             data_path=self.config["general"]["data_path"],
             subject_id=subject_id,

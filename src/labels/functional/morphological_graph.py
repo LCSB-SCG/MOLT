@@ -183,6 +183,8 @@ def assign_tcui_ids(morphological_graph: nx.Graph):
     When a branch is split, the new branch gets a new id.
     When a branch is merged, the merged branch gets a new id.
     """
+    from collections import deque
+    
     # get all root nodes in the graph
     root_nodes = [
         node
@@ -192,12 +194,21 @@ def assign_tcui_ids(morphological_graph: nx.Graph):
     current_id = 0
     mapping = {}
 
-    nodes_to_visit = list(root_nodes)
+    # Use deque for O(1) popleft instead of list.pop(0) which is O(n)
+    nodes_to_visit = deque(root_nodes)
+    visited = set()  # Use set for O(1) membership check instead of O(n) list check
+    
     # traverse the graph and assign ids to each node
     while len(nodes_to_visit) > 0:
-        current_node = nodes_to_visit.pop(0)
+        current_node = nodes_to_visit.popleft()
+        
+        # Skip if already visited
+        if current_node in visited:
+            continue
+        visited.add(current_node)
 
-        in_edges = list(morphological_graph.in_edges(current_node, data=True))
+        # Get in-edges more efficiently
+        in_edges = morphological_graph.in_edges(current_node, data=True)
 
         if len(in_edges) == 0:
             # this is a root node, assign a new id
@@ -205,8 +216,8 @@ def assign_tcui_ids(morphological_graph: nx.Graph):
             morphological_graph.nodes[current_node]["tracked_id"] = current_id
             mapping[current_node] = current_id
 
-        if len(in_edges) == 1:
-            incoming_node = in_edges[0][0]
+        elif len(in_edges) == 1:
+            incoming_node = list(in_edges)[0][0]
             num_out_edges_of_incoming = morphological_graph.out_degree(incoming_node)
             # if the parent node has only one outgoing edge, it is a single branch
             # if the parent node has multiple outgoing edges, it is a split
@@ -222,7 +233,7 @@ def assign_tcui_ids(morphological_graph: nx.Graph):
                 "tracked_id"
             ]
 
-        if len(in_edges) > 1:
+        else:  # len(in_edges) > 1
             # this is a merge, assign a new id
             current_id += 1
             morphological_graph.nodes[current_node]["tracked_id"] = current_id
@@ -230,7 +241,7 @@ def assign_tcui_ids(morphological_graph: nx.Graph):
 
         # add all outgoing nodes to the list of nodes to visit
         for out_node in morphological_graph.successors(current_node):
-            if out_node not in nodes_to_visit:
+            if out_node not in visited:
                 nodes_to_visit.append(out_node)
 
     return morphological_graph, mapping
