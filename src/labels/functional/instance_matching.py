@@ -261,30 +261,47 @@ def match_instances_by_pairwise_binary_union(
             # --- calculate the IOU forward in time (IOU is symmetric, backward reuses these values)
             if prev_original_instances == []:
                 iou_map["forward_in_time"][""].extend(orig_ids)
-            # calculate the IOU from the previous image and the current image
-            for poi, poi_id in zip(prev_original_instances, prev_orig_ids):
-                if original_instances == []:
-                    iou_map["forward_in_time"][poi_id] = []  # --> instance disappeared
-                for oi, oi_id in zip(original_instances, orig_ids):
-                    # calculate the IOU
-                    intersection = np.logical_and(prev_img == poi, img == oi)
-                    union = np.logical_or(prev_img == poi, img == oi)
-                    iou = np.sum(intersection) / np.sum(union)
-                    if poi_id not in iou_map["forward_in_time"].keys():
+            
+            # Pre-compute all instance masks to avoid repeated computations
+            prev_masks = {poi: prev_img == poi for poi in prev_original_instances}
+            curr_masks = {oi:    img == oi for oi in original_instances}
+            
+            # Vectorized IOU computation: compute all pairs at once
+            if prev_original_instances and original_instances:
+                # Keep as bool - more memory efficient since masks are already boolean
+                prev_stack = np.stack([prev_masks[poi] for poi in prev_original_instances], axis=0)
+                curr_stack = np.stack([curr_masks[oi] for oi in original_instances], axis=0)
+                
+                # Vectorized intersection and union using broadcasting
+                # Shape: (num_prev, num_curr, ...)
+                intersections = np.logical_and(prev_stack[:, None, ...], curr_stack[None, :, ...])
+                unions = np.logical_or(prev_stack[:, None, ...], curr_stack[None, :, ...])
+                
+                # Sum over spatial dimensions to get IOU values
+                intersection_sums = intersections.reshape(len(prev_original_instances), len(original_instances), -1).sum(axis=2)
+                union_sums = unions.reshape(len(prev_original_instances), len(original_instances), -1).sum(axis=2)
+                
+                # Compute IOU, handle division by zero
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    iou_matrix = intersection_sums / union_sums
+                    iou_matrix = np.nan_to_num(iou_matrix, nan=0.0)
+                
+                # Store results in iou_map
+                for p_idx, (poi, poi_id) in enumerate(zip(prev_original_instances, prev_orig_ids)):
+                    if original_instances == []:
                         iou_map["forward_in_time"][poi_id] = []
-                    iou_map["forward_in_time"][poi_id].append((oi_id, float(iou)))
+                    else:
+                        iou_map["forward_in_time"][poi_id] = []
+                        for c_idx, (oi, oi_id) in enumerate(zip(original_instances, orig_ids)):
+                            iou_map["forward_in_time"][poi_id].append((oi_id, float(iou_matrix[p_idx, c_idx])))
 
             # --- backward in time: reuse forward IOU values (symmetric)
             if idx == len(img_list) - 1:
                 iou_map["backward_in_time"][""].extend(prev_orig_ids)
             for oi, oi_id in zip(original_instances, orig_ids):
                 if prev_original_instances == []:
-                    iou_map["backward_in_time"][oi_id] = []  # instances newly appeared
+                    iou_map["backward_in_time"][oi_id] = []
                 for poi, poi_id in zip(prev_original_instances, prev_orig_ids):
-                    # calculate the IOU
-                    intersection = np.logical_and(img == oi, prev_img == poi)
-                    union = np.logical_or(img == oi, prev_img == poi)
-                    iou = np.sum(intersection) / np.sum(union)
                     if oi_id not in iou_map["backward_in_time"].keys():
                         iou_map["backward_in_time"][oi_id] = []
                     # Reuse IOU value from forward calculation (IOU is symmetric)
@@ -424,27 +441,42 @@ def match_instances_by_binary_union(
 
             # --- calculate the IOU forward in time (IOU is symmetric, backward reuses these values)
             if prev_original_instances == []:
-                # if there are no original instances in the previous image, we cannot calculate IOUs
-                # this means that the instance has newly appeared in the current image
                 iou_map["forward_in_time"][""].extend(orig_ids)
-            # calculate the IOU from the previous image and the current image
-            for poi, poi_id in zip(prev_original_instances, prev_orig_ids):
-                if original_instances == []:
-                    iou_map["forward_in_time"][poi_id] = []  # --> instance disappeared
-                for oi, oi_id in zip(original_instances, orig_ids):
-                    intersection = np.logical_and(prev_img == poi, img == oi)
-                    union = np.logical_or(prev_img == poi, img == oi)
-                    iou = np.sum(intersection) / np.sum(union)
-                    if poi_id not in iou_map["forward_in_time"].keys():
+            
+            # Pre-compute all instance masks to avoid repeated computations
+            prev_masks = {poi: prev_img == poi for poi in prev_original_instances}
+            curr_masks = {oi: img == oi for oi in original_instances}
+            
+            # Vectorized IOU computation: compute all pairs at once
+            if prev_original_instances and original_instances:
+                # Keep as bool - more memory efficient since masks are already boolean
+                prev_stack = np.stack([prev_masks[poi] for poi in prev_original_instances], axis=0)
+                curr_stack = np.stack([curr_masks[oi] for oi in original_instances], axis=0)
+                
+                intersections = np.logical_and(prev_stack[:, None, ...], curr_stack[None, :, ...])
+                unions = np.logical_or(prev_stack[:, None, ...], curr_stack[None, :, ...])
+                
+                intersection_sums = intersections.reshape(len(prev_original_instances), len(original_instances), -1).sum(axis=2)
+                union_sums = unions.reshape(len(prev_original_instances), len(original_instances), -1).sum(axis=2)
+                
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    iou_matrix = intersection_sums / union_sums
+                    iou_matrix = np.nan_to_num(iou_matrix, nan=0.0)
+                
+                for p_idx, (poi, poi_id) in enumerate(zip(prev_original_instances, prev_orig_ids)):
+                    if original_instances == []:
                         iou_map["forward_in_time"][poi_id] = []
-                    iou_map["forward_in_time"][poi_id].append((oi_id, float(iou)))
+                    else:
+                        iou_map["forward_in_time"][poi_id] = []
+                        for c_idx, (oi, oi_id) in enumerate(zip(original_instances, orig_ids)):
+                            iou_map["forward_in_time"][poi_id].append((oi_id, float(iou_matrix[p_idx, c_idx])))
 
             # --- backward in time: reuse forward IOU values (symmetric)
             if idx == len(img_list) - 1:
                 iou_map["backward_in_time"][""].extend(prev_orig_ids)
             for oi, oi_id in zip(original_instances, orig_ids):
                 if prev_original_instances == []:
-                    iou_map["backward_in_time"][oi_id] = []  # instances newly appeared
+                    iou_map["backward_in_time"][oi_id] = []
                 for poi, poi_id in zip(prev_original_instances, prev_orig_ids):
                     if oi_id not in iou_map["backward_in_time"].keys():
                         iou_map["backward_in_time"][oi_id] = []
