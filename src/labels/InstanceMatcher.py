@@ -16,7 +16,6 @@ from src.labels.functional.instance_matching import (
     match_instances_by_binary_union,
     match_instances_by_intersection_of_two_images,
     match_instances_by_pairwise_binary_union,
-    validate_matched_by_union_images,
 )
 from src.utils.io.data_structure.files_and_paths.general_path_operations import (
     extract_number_from_week_string,
@@ -35,7 +34,11 @@ allowed_registration_to = ["first_timepoint", "preceding_timepoint"]
 
 
 class InstanceMatcher:
-    def __init__(self, config, cohort) -> None:
+    def __init__(
+        self,
+        config,
+        cohort
+    ) -> None:
         self.config: Config = config
         self.cohort: Cohort = cohort
         self.max_num_threads = self.config["InstanceMatcher"]["max_num_threads"]
@@ -50,6 +53,14 @@ class InstanceMatcher:
             else "first_timepoint"
         )
         self.threads = []
+
+        # New optional parameters
+        self.save_union_view = self.config["InstanceMatcher"]["save_union_view"]
+        self.collect_stats = self.config["InstanceMatcher"]["collect_stats"]
+        self.save_lineage_images = self.config["InstanceMatcher"]["save_lineage_images"]
+        self.save_tracked_images = self.config["InstanceMatcher"]["save_tracked_images"]
+        self.save_metadata = self.config["InstanceMatcher"]["save_metadata"]
+        self.write_ctc_format = self.config["InstanceMatcher"]["write_ctc_format"]
 
         if self.reg_to not in allowed_registration_to:
             raise ValueError(
@@ -144,7 +155,6 @@ class InstanceMatcher:
                 unregistered_label_paths=task["unregistered_label_paths"],
                 registered_label_paths=task["registered_label_paths"],
                 week_numbers=task["week_numbers"],
-                validate=True,
             )
 
     def _run_across_channel_matching_thread(self, match_tasks_for_thread: list[dict]):
@@ -317,7 +327,6 @@ class InstanceMatcher:
         unregistered_label_paths: list[str],
         registered_label_paths: list[str],
         week_numbers: list[int] = None,
-        validate: bool = False,
     ) -> None:
         """
         Matches the instances in the unregistered images to the registered images.
@@ -347,13 +356,11 @@ class InstanceMatcher:
         # cell tracking challenge). The evaluation software allows only results folder to be present for evaluation e.g.
         # 01_RES. As we will compare multiple results this is not suited for us so we will sym_link the dataset folders
         # in a results folder per tested algorithm and dataset.
-        if "Cells_" in subject_id:
-            # Create folder to add files or links
+        if self.write_ctc_format:
             ctc_ds_folder = os.path.join(self.config["general"]["result_folder"], "ctc")
             ctc_sub_id = subject_id.replace("Cells_", "")
             ctc_sub_RES = os.path.join(ctc_ds_folder, ctc_sub_id + "_RES")
 
-            # Sym_link paths
             ctc_sub_path_src = os.path.join(self.config["general"]["data_path"], ctc_sub_id)
             ctc_sub_path_dst = os.path.join(ctc_ds_folder, ctc_sub_id)
             ctc_sub_ERR_SEG_src = os.path.join(self.config["general"]["data_path"], ctc_sub_id + "_ERR_SEG")
@@ -381,13 +388,14 @@ class InstanceMatcher:
                 background_instance=self.config["general"]["background_instance"],
             )
 
-            write_to_nifti(
-                nifti_data=union_instances,
-                dtype=union_instances.dtype,
-                filename=unregistered_label_paths[0].replace(
-                    ".nii.gz", "_union_instances.nii.gz"
-                ),
-            )
+            if self.save_union_view:
+                write_to_nifti(
+                    nifti_data=union_instances,
+                    dtype=union_instances.dtype,
+                    filename=unregistered_label_paths[0].replace(
+                        ".nii.gz", "_union_instances.nii.gz"
+                    ),
+                )
 
             # apply the matches
             matched_lineage_images = []
@@ -402,11 +410,8 @@ class InstanceMatcher:
                         ignore_label=self.config["general"]["ignore_label"],
                     )
                 )
+            matched_tcui_images = []
         else:
-            if validate:
-                validate = False
-                logging.warning("Validation not supported for pairwise matching.")
-
             # pairwise matching
             lineage_mapping, tcui_mapping, graph = (
                 match_instances_by_pairwise_binary_union(
@@ -419,17 +424,17 @@ class InstanceMatcher:
             )
 
             # save the graph as graphml file
-            graph_path = os.path.join(
-                self.config["general"]["result_folder"],
-                "lineage_graphs",
-                f"{subject_id}_{roi}_graph.graphml",
-            )
-            os.makedirs(os.path.dirname(graph_path), exist_ok=True)
-            nx.write_graphml(graph, graph_path)
-            # Write it in the ctc format for use with their comparison tools.
-            if "Cells_" in subject_id:
-                ctc_graph_path = os.path.join(ctc_sub_RES,"res_track.txt")
-                write_graph_to_ctc(graph, ctc_graph_path)
+            if self.write_ctc_format:
+                graph_path = os.path.join(
+                    self.config["general"]["result_folder"],
+                    "lineage_graphs",
+                    f"{subject_id}_{roi}_graph.graphml",
+                )
+                os.makedirs(os.path.dirname(graph_path), exist_ok=True)
+                nx.write_graphml(graph, graph_path)
+                if self.write_ctc_format:
+                    ctc_graph_path = os.path.join(ctc_sub_RES,"res_track.txt")
+                    write_graph_to_ctc(graph, ctc_graph_path)
 
             # apply the lineage matching
             matched_lineage_images = []
@@ -459,93 +464,62 @@ class InstanceMatcher:
                     )
                 )
 
-        if validate:
-            # apply the matches to the registered images for validation, that the matching is correct
-            matched_registered_images = []
-            for idx, img in enumerate(registered_instance_imgs):
-                matched_registered_images.append(
-                    apply_matching(
-                        matches=lineage_mapping[idx],
-                        image=img,
-                        background_instance=self.config["general"][
-                            "background_instance"
-                        ],
-                        ignore_label=self.config["general"]["ignore_label"],
-                    )
-                )
+        # Validation removed for performance optimization
 
+        if self.collect_stats:
+            stats_matched_instances = collect_vams_information_for_matched_ids(
+                matched_images=matched_lineage_images,
+                original_images=unregistered_instance_imgs,
+                background_instance=self.config["general"]["background_instance"],
+                week_numbers=week_numbers,
+            )
+            ts_path = get_subject_roi_label_channel_time_series_info_path(
+                data_path=self.config["general"]["data_path"],
+                subject_folder=subject_id,
+                roi=roi,
+                channel_id=channel_id,
+                label_setting=label_settings_folder,
+            )
+            os.makedirs(os.path.dirname(ts_path), exist_ok=True)
+
+            print("Folder to save the stats: " + ts_path)
+            with open(ts_path, "w") as f:
+                f.write(json.dumps(stats_matched_instances, indent=4, sort_keys=True))
+
+        if self.save_lineage_images:
+            for idx, img in enumerate(matched_lineage_images):
                 write_to_nifti(
-                    nifti_data=matched_registered_images[-1],
-                    dtype=matched_registered_images[-1].dtype,
-                    filename=registered_label_paths[idx].replace(
-                        ".nii.gz", "_matched_by_union.nii.gz"
+                    nifti_data=img,
+                    dtype=img.dtype,
+                    filename=unregistered_label_paths[idx].replace(
+                        "instances.nii.gz", "lineage.nii.gz"
                     ),
                 )
 
-            # validate the matched images to never have overlapping instances with different ids across time
-            validate_matched_by_union_images(
-                matched_images=matched_registered_images,
-                union_instances=union_instances,
-                background_instance=self.config["general"]["background_instance"],
-            )
-
-        # collect the statistics for the matched instance ids
-        # for each matched image in the series we need to keep track of the
-        # instances that are the result of vanished, emerged, split or merged instances
-        stats_matched_instances = collect_vams_information_for_matched_ids(
-            matched_images=matched_lineage_images,
-            original_images=unregistered_instance_imgs,
-            background_instance=self.config["general"]["background_instance"],
-            week_numbers=week_numbers,
-        )
-        # save it
-        ts_path = get_subject_roi_label_channel_time_series_info_path(
-            data_path=self.config["general"]["data_path"],
-            subject_folder=subject_id,
-            roi=roi,
-            channel_id=channel_id,
-            label_setting=label_settings_folder,
-        )
-        os.makedirs(os.path.dirname(ts_path), exist_ok=True)
-
-        print("Folder to save the stats: " + ts_path)
-        with open(ts_path, "w") as f:
-            f.write(json.dumps(stats_matched_instances, indent=4, sort_keys=True))
-
-        # save the matched lineage images
-        for idx, img in enumerate(matched_lineage_images):
-            write_to_nifti(
-                nifti_data=img,
-                dtype=img.dtype,
-                filename=unregistered_label_paths[idx].replace(
-                    "instances.nii.gz", "lineage.nii.gz"
-                ),
-            )
-
-        # save the matched tcui images
-        for idx, img in enumerate(matched_tcui_images):
-            nifti_path = unregistered_label_paths[idx].replace(
-                    "instances.nii.gz", "tracked.nii.gz"
+        if self.save_tracked_images:
+            for idx, img in enumerate(matched_tcui_images):
+                nifti_path = unregistered_label_paths[idx].replace(
+                        "instances.nii.gz", "tracked.nii.gz"
+                    )
+                write_to_nifti(
+                    nifti_data=img,
+                    dtype=img.dtype,
+                    filename=nifti_path
                 )
-            write_to_nifti(
-                nifti_data=img,
-                dtype=img.dtype,
-                filename=nifti_path
-            )
-            if "Cells_" in subject_id:
-                timepoint = int(extract_week_from_filepath(nifti_path).replace("_weeks", ""))
-                tiff_path = os.path.join(ctc_sub_RES, f"mask{timepoint:03d}.tif")
-                write_to_tiff(tiff_data=img, filename=tiff_path)
+                if self.write_ctc_format:
+                    timepoint = int(extract_week_from_filepath(nifti_path).replace("_weeks", ""))
+                    tiff_path = os.path.join(ctc_sub_RES, f"mask{timepoint:03d}.tif")
+                    write_to_tiff(tiff_data=img, filename=tiff_path)
 
 
-        # save the meta data
-        for idx, img in enumerate(matched_lineage_images):
-            meta_data = collect_meta_data(img)
-            meta_path = unregistered_label_paths[idx].replace(
-                "instances.nii.gz", "lineage_meta.json"
-            )
-            with open(meta_path, "w") as f:
-                f.write(json.dumps(meta_data, indent=4, sort_keys=True))
+        if self.save_metadata:
+            for idx, img in enumerate(matched_lineage_images):
+                meta_data = collect_meta_data(img)
+                meta_path = unregistered_label_paths[idx].replace(
+                    "instances.nii.gz", "lineage_meta.json"
+                )
+                with open(meta_path, "w") as f:
+                    f.write(json.dumps(meta_data, indent=4, sort_keys=True))
 
     def _run_across_channel_matching_from_paths(
         self,

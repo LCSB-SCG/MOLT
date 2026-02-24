@@ -70,6 +70,12 @@
         "enforce_no_split": false,
         "mode": "pairwise",
         "registration_to": "preceding_timepoint",
+        "save_union_view": false,
+        "collect_stats": false,
+        "save_lineage_images": true,
+        "save_tracked_images": true,
+        "save_metadata": true,
+        "write_ctc_format": true,
         "label_settings_per_channel": [
             {
                 "channel_1": "manual"

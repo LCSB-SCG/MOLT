@@ -104,6 +104,12 @@
         "max_num_threads": 1,
         "enforce_no_merge": false,
         "enforce_no_split": false,
+        "save_union_view": false,
+        "collect_stats": false,
+        "save_lineage_images": true,
+        "save_tracked_images": true,
+        "save_metadata": false,
+        "write_ctc_format": false,
         "mode": "global",
         "registration_to": "first_timepoint",
         "label_settings_per_channel": [
