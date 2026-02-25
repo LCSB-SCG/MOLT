@@ -14,6 +14,105 @@ from src.labels.Matches import CrossChannelMatches, Matches
 from src.utils.io.nifti.write_to_nifti import write_to_nifti
 
 
+def _get_bounding_box_crop(image: np.ndarray, mask: np.ndarray) -> tuple:
+    """
+    Get a cropped view of the image using the bounding box of the mask.
+
+    Args:
+        image: The image to crop.
+        mask: The binary mask to compute bounding box from.
+
+    Returns:
+        Tuple of (cropped_image, bounding_box_slices) where bounding_box_slices
+        can be used to index back into the original mask.
+    """
+    bbox = np.array(np.where(mask)).T
+    if len(bbox) == 0:
+        return None, None
+    min_coords = bbox.min(axis=0)
+    max_coords = bbox.max(axis=0) + 1
+    crop_slices = tuple(slice(min_coords[i], max_coords[i]) for i in range(image.ndim))
+    return image[crop_slices], crop_slices
+
+
+def _compute_instance_masks(image: np.ndarray, instance_ids: list, bbox_slices: tuple) -> dict:
+    """Pre-compute boolean masks for each instance, cropped to the bounding box."""
+    cropped = image[bbox_slices]
+    return {inst_id: cropped == inst_id for inst_id in instance_ids}
+
+
+def _compute_iou_matrix(prev_masks: dict, curr_masks: dict, prev_ids: list, curr_ids: list) -> np.ndarray:
+    """
+    Compute the IOU matrix between two sets of instance masks using vectorized operations.
+
+    Args:
+        prev_masks: Dict mapping instance_id to boolean mask from previous image.
+        curr_masks: Dict mapping instance_id to boolean mask from current image.
+        prev_ids: List of instance IDs from previous image.
+        curr_ids: List of instance IDs from current image.
+
+    Returns:
+        2D numpy array of IOU values with shape (len(prev_ids), len(curr_ids)).
+    """
+    if not prev_ids or not curr_ids:
+        return np.zeros((len(prev_ids), len(curr_ids)))
+
+    prev_stack = np.stack([prev_masks[p] for p in prev_ids], axis=0)
+    curr_stack = np.stack([curr_masks[c] for c in curr_ids], axis=0)
+
+    intersections = np.logical_and(prev_stack[:, None, ...], curr_stack[None, :, ...])
+    unions = np.logical_or(prev_stack[:, None, ...], curr_stack[None, :, ...])
+
+    intersection_sums = intersections.reshape(len(prev_ids), len(curr_ids), -1).sum(axis=2)
+    union_sums = unions.reshape(len(prev_ids), len(curr_ids), -1).sum(axis=2)
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        iou_matrix = intersection_sums / union_sums
+        iou_matrix = np.nan_to_num(iou_matrix, nan=0.0)
+
+    return iou_matrix
+
+
+def _populate_iou_map_forward(
+    iou_map: dict,
+    prev_orig_ids: list,
+    orig_ids: list,
+    iou_matrix: np.ndarray,
+) -> None:
+    """Populate the forward-in-time IOU map from a computed IOU matrix."""
+    for p_idx, poi_id in enumerate(prev_orig_ids):
+        if not orig_ids:
+            iou_map["forward_in_time"][poi_id] = []
+        else:
+            iou_map["forward_in_time"][poi_id] = [
+                (oi_id, float(iou_matrix[p_idx, c_idx]))
+                for c_idx, oi_id in enumerate(orig_ids)
+            ]
+
+
+def _populate_iou_map_backward(
+    iou_map: dict,
+    prev_orig_ids: list,
+    orig_ids: list,
+) -> None:
+    """Populate the backward-in-time IOU map by reusing forward IOU values (IOU is symmetric)."""
+    for oi_id in orig_ids:
+        if not prev_orig_ids:
+            iou_map["backward_in_time"][oi_id] = []
+            continue
+        if oi_id not in iou_map["backward_in_time"]:
+            iou_map["backward_in_time"][oi_id] = []
+
+        for poi_id in prev_orig_ids:
+            forward_iou = next(
+                (iou_val for iou_val in iou_map["forward_in_time"][poi_id]
+                 if iou_val[0] == oi_id),
+                None
+            )
+            if forward_iou:
+                iou_map["backward_in_time"][oi_id].append((poi_id, forward_iou[1]))
+
+
 def _mapping_to_per_img_mapping(
     original_to_shared_id: dict,
     num_images: int,
@@ -236,20 +335,15 @@ def match_instances_by_pairwise_binary_union(
 
             formated_union_id = f"U_{idx}_{union_id}"
 
-            # Get bounding box around the union instance to reduce memory usage
             union_mask = labels == union_id
-            bbox = np.array(np.where(union_mask)).T
-            if len(bbox) == 0:
-                continue
-            min_coords = bbox.min(axis=0)
-            max_coords = bbox.max(axis=0) + 1
-            
-            # Crop images to bounding box (much smaller than full image)
-            img_crop = img[tuple(slice(min_coords[i], max_coords[i]) for i in range(img.ndim))]
-            prev_img_crop = prev_img[tuple(slice(min_coords[i], max_coords[i]) for i in range(prev_img.ndim))]
+            img_crop, crop_slices = _get_bounding_box_crop(img, union_mask)
+            prev_img_crop, _ = _get_bounding_box_crop(prev_img, union_mask)
 
-            # get the original instances that overlap with the union instance, excluding the background instance
-            original_instances = np.unique(img_crop[union_mask[tuple(slice(min_coords[i], max_coords[i]) for i in range(img.ndim))]])
+            if img_crop is None or prev_img_crop is None:
+                logging.warning(f"Union id {union_id} has no overlapping region in image {idx}. Skipping IOU calculation for this union instance.")
+                continue
+
+            original_instances = np.unique(img_crop[union_mask[crop_slices]])
             original_instances = [
                 i for i in original_instances if i != background_instance
             ]
@@ -257,7 +351,7 @@ def match_instances_by_pairwise_binary_union(
                 f"{idx}_{original_instance}" for original_instance in original_instances
             ]
 
-            prev_original_instances = np.unique(prev_img_crop[union_mask[tuple(slice(min_coords[i], max_coords[i]) for i in range(prev_img.ndim))]])
+            prev_original_instances = np.unique(prev_img_crop[union_mask[crop_slices]])
             prev_original_instances = [
                 i for i in prev_original_instances if i != background_instance
             ]
@@ -266,62 +360,22 @@ def match_instances_by_pairwise_binary_union(
                 for prev_original_instance in prev_original_instances
             ]
 
-            # --- calculate the IOU forward in time (IOU is symmetric, backward reuses these values)
-            if prev_original_instances == []:
+            if not prev_original_instances:
                 iou_map["forward_in_time"][""].extend(orig_ids)
-            
-            # Pre-compute all instance masks to avoid repeated computations (cropped to bbox)
-            prev_masks = {poi: prev_img_crop == poi for poi in prev_original_instances}
-            curr_masks = {oi:    img_crop == oi for oi in original_instances}
-            
-            # Vectorized IOU computation: compute all pairs at once
-            if prev_original_instances and original_instances:
-                # Keep as bool - more memory efficient since masks are already boolean
-                prev_stack = np.stack([prev_masks[poi] for poi in prev_original_instances], axis=0)
-                curr_stack = np.stack([curr_masks[oi] for oi in original_instances], axis=0)
-                
-                # Vectorized intersection and union using broadcasting
-                # Shape: (num_prev, num_curr, ...)
-                intersections = np.logical_and(prev_stack[:, None, ...], curr_stack[None, :, ...])
-                unions = np.logical_or(prev_stack[:, None, ...], curr_stack[None, :, ...])
-                
-                # Sum over spatial dimensions to get IOU values
-                intersection_sums = intersections.reshape(len(prev_original_instances), len(original_instances), -1).sum(axis=2)
-                union_sums = unions.reshape(len(prev_original_instances), len(original_instances), -1).sum(axis=2)
-                
-                # Compute IOU, handle division by zero
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    iou_matrix = intersection_sums / union_sums
-                    iou_matrix = np.nan_to_num(iou_matrix, nan=0.0)
-                
-                # Store results in iou_map
-                for p_idx, (poi, poi_id) in enumerate(zip(prev_original_instances, prev_orig_ids)):
-                    if original_instances == []:
-                        iou_map["forward_in_time"][poi_id] = []
-                    else:
-                        iou_map["forward_in_time"][poi_id] = []
-                        for c_idx, (oi, oi_id) in enumerate(zip(original_instances, orig_ids)):
-                            iou_map["forward_in_time"][poi_id].append((oi_id, float(iou_matrix[p_idx, c_idx])))
 
-            # --- backward in time: reuse forward IOU values (symmetric)
+            prev_masks = _compute_instance_masks(prev_img_crop, prev_original_instances, crop_slices)
+            curr_masks = _compute_instance_masks(img_crop, original_instances, crop_slices)
+
+            iou_matrix = _compute_iou_matrix(prev_masks, curr_masks, prev_original_instances, original_instances)
+            _populate_iou_map_forward(iou_map, prev_orig_ids, orig_ids, iou_matrix)
+
             if idx == len(img_list) - 1:
                 iou_map["backward_in_time"][""].extend(prev_orig_ids)
-            for oi, oi_id in zip(original_instances, orig_ids):
-                if prev_original_instances == []:
-                    iou_map["backward_in_time"][oi_id] = []
-                for poi, poi_id in zip(prev_original_instances, prev_orig_ids):
-                    if oi_id not in iou_map["backward_in_time"].keys():
-                        iou_map["backward_in_time"][oi_id] = []
-                    # Reuse IOU value from forward calculation (IOU is symmetric)
-                    forward_iou = next((iou_val for iou_val in iou_map["forward_in_time"][poi_id] if iou_val[0] == oi_id), None)
-                    if forward_iou:
-                        iou_map["backward_in_time"][oi_id].append((poi_id, forward_iou[1]))
+            _populate_iou_map_backward(iou_map, prev_orig_ids, orig_ids)
 
-            # add the matches to the Matches object
             for orig_combined_id in orig_ids:
                 m.add_match(old_id=orig_combined_id, new_id=formated_union_id)
 
-            # add the matches to the Matches object
             for prev_orig_combined_id in prev_orig_ids:
                 m.add_match(old_id=prev_orig_combined_id, new_id=formated_union_id)
 
@@ -426,20 +480,14 @@ def match_instances_by_binary_union(
         img = img_list[idx]
 
         for union_id in union_instances:
-            # Get bounding box around the union instance to reduce memory usage
             union_mask = labels == union_id
-            bbox = np.array(np.where(union_mask)).T
-            if len(bbox) == 0:
-                continue
-            min_coords = bbox.min(axis=0)
-            max_coords = bbox.max(axis=0) + 1
-            
-            # Crop images to bounding box (much smaller than full image)
-            img_crop = img[tuple(slice(min_coords[i], max_coords[i]) for i in range(img.ndim))]
-            prev_img_crop = prev_img[tuple(slice(min_coords[i], max_coords[i]) for i in range(prev_img.ndim))]
+            img_crop, crop_slices = _get_bounding_box_crop(img, union_mask)
+            prev_img_crop, _ = _get_bounding_box_crop(prev_img, union_mask)
 
-            # get the original instances that overlap with the union instance, excluding the background instance
-            original_instances = np.unique(img_crop[union_mask[tuple(slice(min_coords[i], max_coords[i]) for i in range(img.ndim))]])
+            if img_crop is None or prev_img_crop is None:
+                continue
+
+            original_instances = np.unique(img_crop[union_mask[crop_slices]])
             original_instances = [
                 i for i in original_instances if i != background_instance
             ]
@@ -447,7 +495,7 @@ def match_instances_by_binary_union(
                 f"{idx}_{original_instance}" for original_instance in original_instances
             ]
 
-            prev_original_instances = np.unique(prev_img_crop[union_mask[tuple(slice(min_coords[i], max_coords[i]) for i in range(prev_img.ndim))]])
+            prev_original_instances = np.unique(prev_img_crop[union_mask[crop_slices]])
             prev_original_instances = [
                 i for i in prev_original_instances if i != background_instance
             ]
@@ -456,59 +504,24 @@ def match_instances_by_binary_union(
                 for prev_original_instance in prev_original_instances
             ]
 
-            # add the matches to the Matches object
             for orig_combined_id in orig_ids:
                 m.add_match(old_id=orig_combined_id, new_id=f"U_{idx}_{union_id}")
 
-            # add the matches to the Matches object
             for prev_orig_combined_id in prev_orig_ids:
                 m.add_match(old_id=prev_orig_combined_id, new_id=f"U_{idx}_{union_id}")
 
-            # --- calculate the IOU forward in time (IOU is symmetric, backward reuses these values)
-            if prev_original_instances == []:
+            if not prev_original_instances:
                 iou_map["forward_in_time"][""].extend(orig_ids)
-            
-            # Pre-compute all instance masks to avoid repeated computations (cropped to bbox)
-            prev_masks = {poi: prev_img_crop == poi for poi in prev_original_instances}
-            curr_masks = {oi: img_crop == oi for oi in original_instances}
-            
-            # Vectorized IOU computation: compute all pairs at once
-            if prev_original_instances and original_instances:
-                # Keep as bool - more memory efficient since masks are already boolean
-                prev_stack = np.stack([prev_masks[poi] for poi in prev_original_instances], axis=0)
-                curr_stack = np.stack([curr_masks[oi] for oi in original_instances], axis=0)
-                
-                intersections = np.logical_and(prev_stack[:, None, ...], curr_stack[None, :, ...])
-                unions = np.logical_or(prev_stack[:, None, ...], curr_stack[None, :, ...])
-                
-                intersection = intersections.reshape(len(prev_original_instances), len(original_instances), -1).sum(axis=2)
-                union = unions.reshape(len(prev_original_instances), len(original_instances), -1).sum(axis=2)
-                
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    iou_matrix = intersection / union
-                    iou_matrix = np.nan_to_num(iou_matrix, nan=0.0)
-                
-                for p_idx, (poi, poi_id) in enumerate(zip(prev_original_instances, prev_orig_ids)):
-                    if original_instances == []:
-                        iou_map["forward_in_time"][poi_id] = []
-                    else:
-                        iou_map["forward_in_time"][poi_id] = []
-                        for c_idx, (oi, oi_id) in enumerate(zip(original_instances, orig_ids)):
-                            iou_map["forward_in_time"][poi_id].append((oi_id, float(iou_matrix[p_idx, c_idx])))
 
-            # --- backward in time: reuse forward IOU values (symmetric)
+            prev_masks = _compute_instance_masks(prev_img_crop, prev_original_instances, crop_slices)
+            curr_masks = _compute_instance_masks(img_crop, original_instances, crop_slices)
+
+            iou_matrix = _compute_iou_matrix(prev_masks, curr_masks, prev_original_instances, original_instances)
+            _populate_iou_map_forward(iou_map, prev_orig_ids, orig_ids, iou_matrix)
+
             if idx == len(img_list) - 1:
                 iou_map["backward_in_time"][""].extend(prev_orig_ids)
-            for oi, oi_id in zip(original_instances, orig_ids):
-                if prev_original_instances == []:
-                    iou_map["backward_in_time"][oi_id] = []
-                for poi, poi_id in zip(prev_original_instances, prev_orig_ids):
-                    if oi_id not in iou_map["backward_in_time"].keys():
-                        iou_map["backward_in_time"][oi_id] = []
-                    # Reuse IOU value from forward calculation (IOU is symmetric)
-                    forward_iou = next((iou_val for iou_val in iou_map["forward_in_time"][poi_id] if iou_val[0] == oi_id), None)
-                    if forward_iou:
-                        iou_map["backward_in_time"][oi_id].append((poi_id, forward_iou[1]))
+            _populate_iou_map_backward(iou_map, prev_orig_ids, orig_ids)
 
     # get the final matching
     # this will create connected component analysis across time and space

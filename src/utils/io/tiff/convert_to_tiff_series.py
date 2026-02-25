@@ -25,6 +25,7 @@ def create_tiff_sequence(
     label: bool = False,
     label_settings: dict = None,
     channel: str = "channel_1",
+    file_type: str = "instances",
     save_as_4d: bool = False,
     use_registered: bool = False,
     registration_to: str = "",
@@ -41,6 +42,7 @@ def create_tiff_sequence(
         results_folder (str): Path to the results folder where TIFF files will be saved.
         label (bool): If True, include label information in the TIFF conversion process.
         label_settings (dict): Settings for label processing if label is True.
+        file_type (str): The type of file to retrieve for conversion (e.g., "instances"). Defaults to "instances".
         channel (str): The channel to use for NIfTI file retrieval. Defaults to "channel_1".
         save_as_4d (bool): If True, save all weeks as a single 4D TIFF image. Defaults to False.
         use_registered (bool): If True, use registered NIfTI files instead of raw NIfTI files. Defaults to False.
@@ -76,7 +78,7 @@ def create_tiff_sequence(
                             rois=[roi],
                             weeks=[week],
                             label_setting=label_settings,
-                            file_type="instances",
+                            file_type=file_type,
                             registered=use_registered,
                             registration_to=registration_to,
                             reg_file_type="reg_instances"
@@ -105,11 +107,11 @@ def create_tiff_sequence(
                 tiff_data_4d = np.stack(tiff_data_list, axis=-1)
 
                 print(f"Number of weeks stacked for {subject} - {roi}: {len(weeks)}. Shape of 4D data: {tiff_data_4d.shape}")
-                write_to_nifti(tiff_data_4d, dtype=np.uint16 ,filename=os.path.join(output_dir, "label_4d.nii.gz"))
+                write_to_nifti(tiff_data_4d, dtype=np.uint16 ,filename=os.path.join(output_dir, f"{file_type}_4d.nii.gz"))
                 
                 # Save as a single 4D tiff
                 if label:
-                    tiff_filename = os.path.join(output_dir, "label_4d.ome.tif")
+                    tiff_filename = os.path.join(output_dir, f"{file_type}_4d.ome.tif")
                 else:
                     tiff_filename = os.path.join(output_dir, "rec_4d.ome.tif")
                 write_4d_ome_tiff(tiff_data_4d, tiff_filename)
@@ -127,7 +129,7 @@ def create_tiff_sequence(
                             rois=[roi],
                             weeks=[week],
                             label_setting=label_settings,
-                            file_type="instances",
+                            file_type=file_type,
                             registered=use_registered,
                             registration_to=registration_to,
                             reg_file_type="reg_instances"
@@ -153,9 +155,9 @@ def create_tiff_sequence(
                 
                     # Save as tiff with enumerated filename
                     if label:
-                        tiff_filename = os.path.join(output_dir, f"label_{idx:03d}.tif")
+                        tiff_filename = os.path.join(output_dir, f"{file_type}_{idx:03d}.tif")
                     else:
-                        tiff_filename = os.path.join(output_dir, f"rec_{idx:03d}.tif")
+                        tiff_filename = os.path.join(output_dir, f"nifti_{idx:03d}.tif")
                     write_to_tiff(tiff_data, tiff_filename)
                     print(f"Converted {nifti_file} to {tiff_filename}")
 
