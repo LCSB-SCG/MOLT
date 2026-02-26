@@ -73,6 +73,36 @@ def _compute_iou_matrix(prev_masks: dict, curr_masks: dict, prev_ids: list, curr
     return iou_matrix
 
 
+def _get_non_background_instances(img, mask, background_instance):
+    instances = np.unique(img[mask])
+    return [i for i in instances if i != background_instance]
+
+
+def _add_matches_for_instances(m, combined_ids, union_id):
+    for combined_id in combined_ids:
+        m.add_match(old_id=combined_id, new_id=union_id)
+
+
+def _populate_iou_map_wrapper(iou_map, prev_orig_ids, orig_ids, iou_matrix, idx, num_images):
+    if not prev_orig_ids:
+        iou_map["forward_in_time"][""].extend(orig_ids)
+
+    _populate_iou_map_forward(iou_map, prev_orig_ids, orig_ids, iou_matrix)
+
+    if idx == num_images - 1:
+        iou_map["backward_in_time"][""].extend(prev_orig_ids)
+    _populate_iou_map_backward(iou_map, prev_orig_ids, orig_ids)
+
+
+def _create_iou_map(img_list, background_instance):
+    iou_map = {"forward_in_time": {}, "backward_in_time": {}}
+    iou_map["forward_in_time"][""] = [f"0_{i}" for i in np.unique(img_list[0])]
+    iou_map["backward_in_time"][""] = [
+        f"{len(img_list) - 1}_{i}" for i in np.unique(img_list[-1])
+    ]
+    return iou_map
+
+
 def _populate_iou_map_forward(
     iou_map: dict,
     prev_orig_ids: list,
@@ -296,13 +326,7 @@ def match_instances_by_pairwise_binary_union(
     logging.info(f"Starting pairwise matching for {len(img_list)} images...")
     m = Matches(background_id=background_instance)
 
-    iou_map = {"forward_in_time": {}, "backward_in_time": {}}
-    # newly appearing instances will be added to the iou_map with empty key
-    iou_map["forward_in_time"][""] = [f"0_{i}" for i in np.unique(img_list[0])]
-    # last frame instances will be added to the iou_map with empty key
-    iou_map["backward_in_time"][""] = [
-        f"{len(img_list) - 1}_{i}" for i in np.unique(img_list[-1])
-    ]
+    iou_map = _create_iou_map(img_list, background_instance)
     for idx in range(1, len(img_list)):
         # perform binary union on previous image:
         prev_img = unreg_img_list[idx - 1]
@@ -330,11 +354,9 @@ def match_instances_by_pairwise_binary_union(
         for union_id in np.unique(labels):
 
             if union_id == 0:
-                # skip the background instance union id
                 continue
 
             formated_union_id = f"U_{idx}_{union_id}"
-
             union_mask = labels == union_id
             img_crop, crop_slices = _get_bounding_box_crop(img, union_mask)
             prev_img_crop, _ = _get_bounding_box_crop(prev_img, union_mask)
@@ -343,41 +365,20 @@ def match_instances_by_pairwise_binary_union(
                 logging.warning(f"Union id {union_id} has no overlapping region in image {idx}. Skipping IOU calculation for this union instance.")
                 continue
 
-            original_instances = np.unique(img_crop[union_mask[crop_slices]])
-            original_instances = [
-                i for i in original_instances if i != background_instance
-            ]
-            orig_ids = [
-                f"{idx}_{original_instance}" for original_instance in original_instances
-            ]
+            original_instances = _get_non_background_instances(img_crop, union_mask[crop_slices], background_instance)
+            orig_ids = [f"{idx}_{i}" for i in original_instances]
 
-            prev_original_instances = np.unique(prev_img_crop[union_mask[crop_slices]])
-            prev_original_instances = [
-                i for i in prev_original_instances if i != background_instance
-            ]
-            prev_orig_ids = [
-                f"{idx - 1}_{prev_original_instance}"
-                for prev_original_instance in prev_original_instances
-            ]
-
-            if not prev_original_instances:
-                iou_map["forward_in_time"][""].extend(orig_ids)
+            prev_original_instances = _get_non_background_instances(prev_img_crop, union_mask[crop_slices], background_instance)
+            prev_orig_ids = [f"{idx - 1}_{i}" for i in prev_original_instances]
 
             prev_masks = _compute_instance_masks(prev_img_crop, prev_original_instances, crop_slices)
             curr_masks = _compute_instance_masks(img_crop, original_instances, crop_slices)
 
             iou_matrix = _compute_iou_matrix(prev_masks, curr_masks, prev_original_instances, original_instances)
-            _populate_iou_map_forward(iou_map, prev_orig_ids, orig_ids, iou_matrix)
+            _populate_iou_map_wrapper(iou_map, prev_orig_ids, orig_ids, iou_matrix, idx, len(img_list))
 
-            if idx == len(img_list) - 1:
-                iou_map["backward_in_time"][""].extend(prev_orig_ids)
-            _populate_iou_map_backward(iou_map, prev_orig_ids, orig_ids)
-
-            for orig_combined_id in orig_ids:
-                m.add_match(old_id=orig_combined_id, new_id=formated_union_id)
-
-            for prev_orig_combined_id in prev_orig_ids:
-                m.add_match(old_id=prev_orig_combined_id, new_id=formated_union_id)
+            _add_matches_for_instances(m, orig_ids, formated_union_id)
+            _add_matches_for_instances(m, prev_orig_ids, formated_union_id)
 
     # get the final matching
     logging.info("Computing final matching from connected components...")
@@ -451,26 +452,13 @@ def match_instances_by_binary_union(
 
     m = Matches(background_id=background_instance)
     for img_idx, img in enumerate(img_list):
-        # for each instance in the union, get the overlapping instances in the image
         for union_id in union_instances:
-            # get the original instances that overlap with the union instance, excluding the background instance
-            original_instances = np.unique(img[labels == union_id])
-            original_instances = [
-                i for i in original_instances if i != background_instance
-            ]
-            union_id = f"U_0_{union_id}"  # format the union id
-            # add the matches to the Matches object
-            for original_instance in original_instances:
-                orig_combined_id = f"{img_idx}_{original_instance}"
-                m.add_match(old_id=orig_combined_id, new_id=union_id)
+            original_instances = _get_non_background_instances(img, labels == union_id, background_instance)
+            orig_ids = [f"{img_idx}_{i}" for i in original_instances]
+            union_id = f"U_0_{union_id}"
+            _add_matches_for_instances(m, orig_ids, union_id)
 
-    iou_map = {"forward_in_time": {}, "backward_in_time": {}}
-    # newly appearing instances will be added to the iou_map with empty key
-    iou_map["forward_in_time"][""] = [f"0_{i}" for i in np.unique(img_list[0])]
-    # last frame instances will be added to the iou_map with empty key
-    iou_map["backward_in_time"][""] = [
-        f"{len(img_list) - 1}_{i}" for i in np.unique(img_list[-1])
-    ]
+    iou_map = _create_iou_map(img_list, background_instance)
     
     logging.info(f"Calculating IOU for {len(union_instances)} union instances across {len(img_list)} images...")
 
@@ -487,37 +475,20 @@ def match_instances_by_binary_union(
             if img_crop is None or prev_img_crop is None:
                 continue
 
-            original_instances = np.unique(img_crop[union_mask[crop_slices]])
-            original_instances = [
-                i for i in original_instances if i != background_instance
-            ]
-            orig_ids = [
-                f"{idx}_{original_instance}" for original_instance in original_instances
-            ]
+            original_instances = _get_non_background_instances(img_crop, union_mask[crop_slices], background_instance)
+            orig_ids = [f"{idx}_{i}" for i in original_instances]
 
-            prev_original_instances = np.unique(prev_img_crop[union_mask[crop_slices]])
-            prev_original_instances = [
-                i for i in prev_original_instances if i != background_instance
-            ]
-            prev_orig_ids = [
-                f"{idx - 1}_{prev_original_instance}"
-                for prev_original_instance in prev_original_instances
-            ]
+            prev_original_instances = _get_non_background_instances(prev_img_crop, union_mask[crop_slices], background_instance)
+            prev_orig_ids = [f"{idx - 1}_{i}" for i in prev_original_instances]
 
-            for orig_combined_id in orig_ids:
-                m.add_match(old_id=orig_combined_id, new_id=f"U_{idx}_{union_id}")
-
-            for prev_orig_combined_id in prev_orig_ids:
-                m.add_match(old_id=prev_orig_combined_id, new_id=f"U_{idx}_{union_id}")
-
-            if not prev_original_instances:
-                iou_map["forward_in_time"][""].extend(orig_ids)
+            _add_matches_for_instances(m, orig_ids, f"U_{idx}_{union_id}")
+            _add_matches_for_instances(m, prev_orig_ids, f"U_{idx}_{union_id}")
 
             prev_masks = _compute_instance_masks(prev_img_crop, prev_original_instances, crop_slices)
             curr_masks = _compute_instance_masks(img_crop, original_instances, crop_slices)
 
             iou_matrix = _compute_iou_matrix(prev_masks, curr_masks, prev_original_instances, original_instances)
-            _populate_iou_map_forward(iou_map, prev_orig_ids, orig_ids, iou_matrix)
+            _populate_iou_map_wrapper(iou_map, prev_orig_ids, orig_ids, iou_matrix, idx, len(img_list))
 
             if idx == len(img_list) - 1:
                 iou_map["backward_in_time"][""].extend(prev_orig_ids)

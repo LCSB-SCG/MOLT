@@ -395,38 +395,11 @@ class InstanceMatcher:
 
         if self.mode == "global":
             logging.info(f"Running global matching for {subject_id} - {roi} - {channel_id}...")
-            # match the instances
-            matches, union_instances, _ = match_instances_by_binary_union(
+            lineage_mapping, tcui_mapping, graph = match_instances_by_binary_union(
                 img_list=registered_instance_imgs,
                 background_instance=self.config["general"]["background_instance"],
             )
-
-            logging.info("Applying matches to lineage images...")
-            if self.save_union_view:
-                write_to_nifti(
-                    nifti_data=union_instances,
-                    dtype=union_instances.dtype,
-                    filename=unregistered_label_paths[0].replace(
-                        ".nii.gz", "_union_instances.nii.gz"
-                    ),
-                )
-
-            # apply the matches
-            matched_lineage_images = []
-            for idx, img in enumerate(unregistered_instance_imgs):
-                matched_lineage_images.append(
-                    apply_matching(
-                        matches=matches[idx],
-                        image=img,
-                        background_instance=self.config["general"][
-                            "background_instance"
-                        ],
-                        ignore_label=self.config["general"]["ignore_label"],
-                    )
-                )
-            matched_tcui_images = []
         else:
-            # pairwise matching
             logging.info(f"Running pairwise matching for {subject_id} - {roi} - {channel_id}...")
             lineage_mapping, tcui_mapping, graph = (
                 match_instances_by_pairwise_binary_union(
@@ -438,7 +411,6 @@ class InstanceMatcher:
                 )
             )
 
-            # save the graph as graphml file
             if self.write_ctc_format:
                 graph_path = os.path.join(
                     self.config["general"]["result_folder"],
@@ -451,33 +423,20 @@ class InstanceMatcher:
                     ctc_graph_path = os.path.join(ctc_sub_RES,"res_track.txt")
                     write_graph_to_ctc(graph, ctc_graph_path)
 
-            # apply the lineage matching
-            matched_lineage_images = []
-            for idx, img in enumerate(unregistered_instance_imgs):
-                matched_lineage_images.append(
-                    apply_matching(
-                        matches=lineage_mapping[idx],
-                        image=img,
-                        background_instance=self.config["general"][
-                            "background_instance"
-                        ],
-                        ignore_label=self.config["general"]["ignore_label"],
-                    )
-                )
+        logging.info("Applying matches to images...")
 
-            # apply the lineage mapping to the matched images
-            matched_tcui_images = []
-            for idx, img in enumerate(unregistered_instance_imgs):
-                matched_tcui_images.append(
-                    apply_matching(
-                        matches=tcui_mapping[idx],
-                        image=img,
-                        background_instance=self.config["general"][
-                            "background_instance"
-                        ],
-                        ignore_label=self.config["general"]["ignore_label"],
-                    )
-                )
+        background_instance = self.config["general"]["background_instance"]
+        ignore_label = self.config["general"]["ignore_label"]
+
+        matched_lineage_images = [
+            apply_matching(matches=lineage_mapping[idx], image=img, background_instance=background_instance, ignore_label=ignore_label)
+            for idx, img in enumerate(unregistered_instance_imgs)
+        ]
+
+        matched_tcui_images = [
+            apply_matching(matches=tcui_mapping[idx], image=img, background_instance=background_instance, ignore_label=ignore_label)
+            for idx, img in enumerate(unregistered_instance_imgs)
+        ]
 
         # Validation removed for performance optimization
 
