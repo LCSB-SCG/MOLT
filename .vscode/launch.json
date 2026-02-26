@@ -9,5 +9,14 @@
             "console": "integratedTerminal",
             "justMyCode": false
         }
+        {
+            "name": "Run test",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["${file}"],
+            "console": "integratedTerminal",
+            "justMyCode": false
+        }
     ]
 }

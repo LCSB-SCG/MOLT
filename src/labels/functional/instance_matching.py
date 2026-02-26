@@ -1,3 +1,25 @@
+"""
+Instance Matching Module
+
+This module provides functionality for matching instances across multiple images (time points)
+using binary union of connected components. It supports two modes:
+1. Global Binary Union: Uses the union over ALL time points to create a single global view
+2. Pairwise Binary Union: Uses pairwise unions between consecutive time points
+
+The module produces two types of mappings:
+- Lineage Mapping: Groups all connected instances (via binary union) into the same lineage
+- TCUI (Temporally Consistent Unique Instance) Mapping: Assigns unique IDs that persist
+  across time, handling splits and merges
+
+Key Concepts:
+- Binary Union: The union of all binarized (non-background) instances across images
+- Connected Components: Groups of instances that touch/overlap in the binary union
+- Union ID: An ID representing a connected component in the binary union (format: U_{time_idx}_{union_id})
+- Lineage ID: Groups all instances that are connected through the binary union
+- TCUI ID: A unique ID that persists across time for tracking individual instances,
+           getting new IDs when splits or merges occur
+"""
+
 import logging
 
 import networkx as nx
@@ -16,15 +38,22 @@ from src.utils.io.nifti.write_to_nifti import write_to_nifti
 
 def _get_bounding_box_crop(image: np.ndarray, mask: np.ndarray) -> tuple:
     """
-    Get a cropped view of the image using the bounding box of the mask.
+    Crop an image to the bounding box of a mask for efficient processing.
+
+    This function computes the bounding box of all True pixels in the mask
+    and returns a cropped view of the image along with the slices that
+    can be used to index back into the original mask.
 
     Args:
-        image: The image to crop.
-        mask: The binary mask to compute bounding box from.
+        image: The image to crop (3D or 2D numpy array).
+        mask: Boolean mask indicating which pixels to compute bounding box for.
 
     Returns:
-        Tuple of (cropped_image, bounding_box_slices) where bounding_box_slices
-        can be used to index back into the original mask.
+        Tuple of (cropped_image, bounding_box_slices) where:
+        - cropped_image: The image cropped to the bounding box
+        - bounding_box_slices: Tuple of slices that can be used to index
+          the original mask/image (e.g., mask[bbox_slices])
+        Returns (None, None) if mask has no True pixels.
     """
     bbox = np.array(np.where(mask)).T
     if len(bbox) == 0:
@@ -36,36 +65,60 @@ def _get_bounding_box_crop(image: np.ndarray, mask: np.ndarray) -> tuple:
 
 
 def _compute_instance_masks(image: np.ndarray, instance_ids: list, bbox_slices: tuple) -> dict:
-    """Pre-compute boolean masks for each instance, cropped to the bounding box."""
+    """
+    Pre-compute boolean masks for each instance, cropped to a bounding box.
+
+    Creates a dictionary mapping each instance ID to a boolean mask of where
+    that instance appears in the cropped image region.
+
+    Args:
+        image: The full image array.
+        instance_ids: List of instance IDs to create masks for.
+        bbox_slices: Tuple of slices defining the bounding box region.
+
+    Returns:
+        Dictionary mapping instance_id -> boolean numpy array (True where
+        that instance appears in the cropped region).
+    """
     cropped = image[bbox_slices]
     return {inst_id: cropped == inst_id for inst_id in instance_ids}
 
 
 def _compute_iou_matrix(prev_masks: dict, curr_masks: dict, prev_ids: list, curr_ids: list) -> np.ndarray:
     """
-    Compute the IOU matrix between two sets of instance masks using vectorized operations.
+    Compute the Intersection over Union (IOU) matrix between two sets of instance masks.
+
+    IOU = intersection / union
+    This is computed efficiently using vectorized numpy operations by stacking
+    all masks and computing pairwise intersections/unions.
 
     Args:
-        prev_masks: Dict mapping instance_id to boolean mask from previous image.
-        curr_masks: Dict mapping instance_id to boolean mask from current image.
-        prev_ids: List of instance IDs from previous image.
-        curr_ids: List of instance IDs from current image.
+        prev_masks: Dictionary mapping instance_id to boolean mask from previous image.
+        curr_masks: Dictionary mapping instance_id to boolean mask from current image.
+        prev_ids: List of instance IDs from previous image (order determines row order).
+        curr_ids: List of instance IDs from current image (order determines column order).
 
     Returns:
         2D numpy array of IOU values with shape (len(prev_ids), len(curr_ids)).
+        Element [i, j] represents the IOU between prev_ids[i] and curr_ids[j].
     """
     if not prev_ids or not curr_ids:
         return np.zeros((len(prev_ids), len(curr_ids)))
 
+    # Stack all masks as separate channels for vectorized computation
     prev_stack = np.stack([prev_masks[p] for p in prev_ids], axis=0)
     curr_stack = np.stack([curr_masks[c] for c in curr_ids], axis=0)
 
+    # Compute pairwise intersections and unions using broadcasting
+    # Shape: (len(prev_ids), len(curr_ids), *spatial_dims)
     intersections = np.logical_and(prev_stack[:, None, ...], curr_stack[None, :, ...])
     unions = np.logical_or(prev_stack[:, None, ...], curr_stack[None, :, ...])
 
+    # Sum over spatial dimensions to get total intersection/union counts
     intersection_sums = intersections.reshape(len(prev_ids), len(curr_ids), -1).sum(axis=2)
     union_sums = unions.reshape(len(prev_ids), len(curr_ids), -1).sum(axis=2)
 
+    # Compute IOU, handling division by zero
     with np.errstate(divide='ignore', invalid='ignore'):
         iou_matrix = intersection_sums / union_sums
         iou_matrix = np.nan_to_num(iou_matrix, nan=0.0)
@@ -74,32 +127,93 @@ def _compute_iou_matrix(prev_masks: dict, curr_masks: dict, prev_ids: list, curr
 
 
 def _get_non_background_instances(img, mask, background_instance):
+    """
+    Extract unique non-background instance IDs from an image masked region.
+
+    Args:
+        img: The label image array.
+        mask: Boolean mask indicating which pixels to consider.
+        background_instance: The instance ID representing background (to exclude).
+
+    Returns:
+        List of instance IDs present in the masked region, excluding background.
+    """
     instances = np.unique(img[mask])
     return [i for i in instances if i != background_instance]
 
 
 def _add_matches_for_instances(m, combined_ids, union_id):
+    """
+    Add matches from multiple original instance IDs to a single union ID.
+
+    This is a helper that iterates over combined_ids and adds each as a match
+    pointing to the same union_id. Used when multiple original instances
+    are connected through a union (e.g., during merge or split events).
+
+    Args:
+        m: Matches object to add matches to.
+        combined_ids: List of original combined IDs (format: "{img_idx}_{instance_id}").
+        union_id: The union ID to map these instances to.
+    """
     for combined_id in combined_ids:
         m.add_match(old_id=combined_id, new_id=union_id)
 
 
 def _populate_iou_map_wrapper(iou_map, prev_orig_ids, orig_ids, iou_matrix, idx, num_images):
+    """
+    Populate the IOU map for forward time connections, handling edge cases.
+
+    This wrapper handles:
+    - New instances appearing (prev_orig_ids is empty)
+    - Instances disappearing (last frame: extend forward map with prev_orig_ids)
+    - Normal forward IOU population
+
+    Args:
+        iou_map: Dictionary to store IOU values (modified in place).
+        prev_orig_ids: List of instance IDs from previous time point.
+        orig_ids: List of instance IDs from current time point.
+        iou_matrix: Precomputed IOU matrix between prev and curr instances.
+        idx: Current time point index.
+        num_images: Total number of images in the sequence.
+    """
+    # Handle newly appearing instances (no previous frame match)
     if not prev_orig_ids:
         iou_map["forward_in_time"][""].extend(orig_ids)
 
+    # Populate forward IOU mappings
     _populate_iou_map_forward(iou_map, prev_orig_ids, orig_ids, iou_matrix)
 
+    # Handle disappearing instances (last frame)
+    # Extend forward map with instances that will disappear
     if idx == num_images - 1:
-        iou_map["backward_in_time"][""].extend(prev_orig_ids)
-    _populate_iou_map_backward(iou_map, prev_orig_ids, orig_ids)
+        iou_map["forward_in_time"][""].extend(prev_orig_ids)
 
 
 def _create_iou_map(img_list, background_instance):
-    iou_map = {"forward_in_time": {}, "backward_in_time": {}}
+    """
+    Initialize the IOU map structure for tracking instance overlaps across time.
+
+    The IOU map stores pairwise IOU values between instances across consecutive
+    time points. It's used by the morphological graph building to handle
+    merge and split events.
+
+    Args:
+        img_list: List of images in the time series.
+        background_instance: The ID representing background (to exclude).
+
+    Returns:
+        Dictionary with structure:
+        {
+            "forward_in_time": {
+                "": [list of instance IDs appearing in first frame],
+                "img_idx_instance_id": [(match_id, iou_value), ...],
+                ...
+            }
+        }
+    """
+    iou_map = {"forward_in_time": {}}
+    # Initialize with instances from the first frame
     iou_map["forward_in_time"][""] = [f"0_{i}" for i in np.unique(img_list[0])]
-    iou_map["backward_in_time"][""] = [
-        f"{len(img_list) - 1}_{i}" for i in np.unique(img_list[-1])
-    ]
     return iou_map
 
 
@@ -109,7 +223,18 @@ def _populate_iou_map_forward(
     orig_ids: list,
     iou_matrix: np.ndarray,
 ) -> None:
-    """Populate the forward-in-time IOU map from a computed IOU matrix."""
+    """
+    Populate the forward-in-time IOU map from a computed IOU matrix.
+
+    Stores IOU values for each instance in the previous frame, indicating
+    how much it overlaps with each instance in the current frame.
+
+    Args:
+        iou_map: Dictionary to store IOU values (modified in place).
+        prev_orig_ids: List of instance IDs from previous time point.
+        orig_ids: List of instance IDs from current time point.
+        iou_matrix: 2D array of IOU values.
+    """
     for p_idx, poi_id in enumerate(prev_orig_ids):
         if not orig_ids:
             iou_map["forward_in_time"][poi_id] = []
@@ -120,40 +245,32 @@ def _populate_iou_map_forward(
             ]
 
 
-def _populate_iou_map_backward(
-    iou_map: dict,
-    prev_orig_ids: list,
-    orig_ids: list,
-) -> None:
-    """Populate the backward-in-time IOU map by reusing forward IOU values (IOU is symmetric)."""
-    for oi_id in orig_ids:
-        if not prev_orig_ids:
-            iou_map["backward_in_time"][oi_id] = []
-            continue
-        if oi_id not in iou_map["backward_in_time"]:
-            iou_map["backward_in_time"][oi_id] = []
-
-        for poi_id in prev_orig_ids:
-            forward_iou = next(
-                (iou_val for iou_val in iou_map["forward_in_time"][poi_id]
-                 if iou_val[0] == oi_id),
-                None
-            )
-            if forward_iou:
-                iou_map["backward_in_time"][oi_id].append((poi_id, forward_iou[1]))
-
-
 def _mapping_to_per_img_mapping(
     original_to_shared_id: dict,
     num_images: int,
 ) -> list[dict]:
-    """Convert a mapping from original instance ids to shared instance ids
-    into a list of mappings, one for each image.
+    """
+    Convert a global mapping from original IDs to shared IDs into per-image mappings.
+
+    The original mappings use combined IDs (format: "{img_idx}_{original_instance_id}").
+    This function converts them into a list of dictionaries, one per image,
+    where keys are original instance IDs and values are the shared/lineage/TCUI IDs.
+
+    Example:
+        Input: {"0_1": "lineage_0", "1_1": "lineage_0", "2_2": "lineage_1"}
+        Output: [
+            {1: "lineage_0"},    # frame 0: instance 1 -> lineage_0
+            {1: "lineage_0"},    # frame 1: instance 1 -> lineage_0
+            {2: "lineage_1"}     # frame 2: instance 2 -> lineage_1
+        ]
+
     Args:
-        original_to_shared_id (dict): A mapping from original instance ids to shared instance ids.
-        num_images (int): The number of images.
+        original_to_shared_id: Dictionary mapping combined IDs to shared IDs.
+        num_images: Number of images in the time series.
+
     Returns:
-        list[dict]: A list of mappings, one for each image.
+        List of dictionaries, one per image, mapping original instance IDs
+        to their shared/lineage/TCUI IDs.
     """
     per_img_mapping = [{} for _ in range(num_images)]
     for original_id, shared_id in original_to_shared_id.items():
@@ -170,16 +287,18 @@ def exclude_instances_at_mask(
     background_instance: int,
 ):
     """
-    Excludes instances from the label image that are outside the mask.
+    Exclude instances from a label image that are outside a given mask.
+
+    Any instance that has voxels outside the mask will be set to background.
+    This is useful for restricting analysis to a specific region.
 
     Args:
-        instance_image (np.ndarray): The label image.
-        mask (np.ndarray): The mask.
-        background_instance (int): The id of the background instance.
+        instance_image: The label image (3D or 2D numpy array).
+        mask: Binary mask defining the region to keep.
+        background_instance: The ID representing background.
 
     Returns:
-        np.ndarray: The label image with the instances outside the mask set to 0.
-        set: The set of instances that were excluded.
+        Tuple of (modified_image, set_of_excluded_instances).
     """
     instances = np.unique(instance_image)
     inst_to_exclude = set()
@@ -203,15 +322,34 @@ def find_connected_components_in_adjacencies(
     enforce_no_split=False,
 ):
     """
-    Get the connected components of the adjacencies.
+    Find connected components in the adjacency graph and build morphological graph.
+
+    This function:
+    1. Builds an undirected graph from the adjacency mappings
+    2. Converts to a directed morphological graph using either global or pairwise mapping
+    3. Returns connected components and the morphological graph
+
+    Args:
+        adjacencies: Dictionary mapping original IDs to their union IDs.
+        global_view_mapping: If True, use global binary union mapping.
+                           If False, use pairwise binary union mapping.
+        iou: Optional IOU map for handling merge/split in morphological graph.
+        enforce_no_merge: If True, prevent merges in the graph.
+        enforce_no_split: If True, prevent splits in the graph.
+
+    Returns:
+        Tuple of (connected_components, morphological_graph).
     """
+    # Build undirected graph from adjacencies
+    # Each edge connects an original ID to a union ID
     G = nx.Graph()
     for key_id, value_ids in adjacencies.items():
-        # treat the old instance as a node as we want to find connected components of the original instances
         for v_id in value_ids:
             G.add_edge(key_id, v_id)
 
+    # Build directed morphological graph based on mode
     if not global_view_mapping:
+        # Pairwise: Connect only consecutive time points
         G = get_morphological_graph_frame_pair_mapping(
             G,
             iou=iou,
@@ -219,6 +357,7 @@ def find_connected_components_in_adjacencies(
             enforce_no_split=enforce_no_split,
         )
     else:
+        # Global: Connect all time points through union
         G = get_morphological_graph_global_view_mapping(
             G,
             iou=iou,
@@ -226,6 +365,7 @@ def find_connected_components_in_adjacencies(
             enforce_no_split=enforce_no_split,
         )
 
+    # Get connected components in the undirected version
     cc = nx.connected_components(G.to_undirected())
     return cc, G
 
@@ -239,10 +379,26 @@ def get_final_matching(
     enforce_no_split=False,
 ):
     """
-    Get the final matching of the instances, by identifying connected components in the adjacencies
-    and assigning a new id to all the original instances in the component.
+    Compute the final lineage and TCUI mappings from instance adjacencies.
+
+    This is the core function that produces the final mappings:
+    1. Finds connected components (lineage) - all instances connected through
+       the binary union get the same lineage ID
+    2. Assigns TCUI (Temporally Consistent Unique Instance) IDs by traversing
+       the morphological graph and assigning unique IDs to each branch
+
+    Args:
+        adjacencies: Dictionary mapping original IDs to union IDs.
+        global_view_mapping: If True, use global binary union approach.
+        background_instance: The ID representing background.
+        iou: Optional IOU map for merge/split handling.
+        enforce_no_merge: If True, prevent merges.
+        enforce_no_split: If True, prevent splits.
+
+    Returns:
+        Tuple of (original_to_lineage_id, original_to_tcui_id, morphological_graph).
     """
-    # original ids to connected component ids
+    # Find connected components and build morphological graph
     cc, G = find_connected_components_in_adjacencies(
         adjacencies=adjacencies,
         global_view_mapping=global_view_mapping,
@@ -251,22 +407,27 @@ def get_final_matching(
         enforce_no_split=enforce_no_split,
     )
 
-    # get the lineage ids
+    # === LINEAGE MAPPING ===
+    # Each connected component gets one lineage ID
+    # All original instances in the component map to the same lineage ID
     connected_components = list(cc)
     original_to_lineage_id = {}
     for c_idx, component in enumerate(connected_components):
-        # for each connected component, assign a new id to all the original instances in the component
+        # Assign new lineage ID for this component
         if background_instance == c_idx:
-            # do not assign the background instance to a new id
+            # Don't assign lineage ID to background
             new_idx = len(list(connected_components))
         else:
             new_idx = c_idx
+        # Map all instances in this component to the same lineage ID
         for instance_id in component:
             if type(instance_id) is not str:
                 instance_id = int(instance_id)
             original_to_lineage_id[instance_id] = new_idx
 
-    # get the temporally consistent unique instance (tcui) ids in the graph
+    # === TCUI MAPPING ===
+    # Assign temporally consistent unique instance IDs by traversing the graph
+    # Each branch gets a unique ID; splits and merges create new IDs
     graph, original_to_tcui_id = assign_tcui_ids(G)
 
     return original_to_lineage_id, original_to_tcui_id, graph
@@ -280,31 +441,38 @@ def apply_matching(
     verbose=False,
 ) -> np.ndarray:
     """
-    Applies the matching to the image.
+    Apply a mapping to transform instance IDs in an image.
+
+    This function remaps instance IDs in an image according to a mapping dictionary.
+    Any instances not in the mapping are assigned the ignore_label.
 
     Args:
-        matches (dict): The matching dictionary.
-        image (np.ndarray): The image to apply the matching to.
-        verbose (bool): If True, print the unique values in the image before and after the matching.
+        matches: Dictionary mapping original instance IDs to new IDs.
+                 Keys are original IDs, values are new IDs (lineage or TCUI).
+        image: The label image to transform.
+        ignore_label: Value to assign to instances not in the mapping.
+        background_instance: The ID representing background (kept unchanged).
+        verbose: If True, print logging information about unmatched instances.
 
     Returns:
-        np.ndarray: The image with the matching applied.
+        New image array with instance IDs remapped according to the mapping.
     """
-    # Check for instances that are not matched, i.e. instances that are present in the unregistred image
-    # but not in the registered image, due to interpolation or other reasons
+    # Find instances that are not in the mapping
     unique_instances = set(np.unique(image))
     matched_instances = set(matches.keys())
     unmatched_instances = unique_instances - matched_instances
+    
     if verbose:
         logging.info("Uniques before applying match: " + str(np.unique(image)))
         logging.info("Unmatched instances: " + str(unmatched_instances))
 
+    # Assign ignore_label to unmatched instances (except background)
     for unmatched_instance in unmatched_instances:
         if unmatched_instance == background_instance:
             continue
         matches[unmatched_instance] = ignore_label
 
-    # apply the matching
+    # Apply the mapping: create new image with remapped IDs
     matched_image = np.zeros_like(image).astype(np.int32)
     for instance in matches.keys():
         matched_image[image == instance] = matches[instance]
@@ -323,17 +491,50 @@ def match_instances_by_pairwise_binary_union(
     enforce_no_merge=False,
     enforce_no_split=False,
 ):
+    """
+    Match instances using pairwise binary union between consecutive time points.
+
+    This mode computes the binary union for each pair of consecutive images,
+    connecting instances that overlap in adjacent frames. This creates a
+    chain of connections through time.
+
+    Algorithm:
+    1. For each pair of consecutive images (t-1, t):
+       - Compute binary union of both images
+       - Find connected components in the union
+       - For each union component, record which instances overlap
+       - Compute IOU between overlapping instances
+    2. Build morphological graph connecting instances across time
+    3. Compute lineage and TCUI mappings from the graph
+
+    Args:
+        img_list: List of registered/aligned label images (same size).
+        unreg_img_list: List of unregistered original label images.
+        background_instance: The ID representing background.
+        verbose: If True, print progress information.
+        enforce_no_merge: If True, prevent merges in final mapping.
+        enforce_no_split: If True, prevent splits in final mapping.
+
+    Returns:
+        Tuple of (lineage_mapping, tcui_mapping, morphological_graph).
+        - lineage_mapping: List of dicts, one per image, mapping original IDs to lineage IDs
+        - tcui_mapping: List of dicts, one per image, mapping original IDs to TCUI IDs
+        - morphological_graph: NetworkX directed graph of instance relationships
+    """
     logging.info(f"Starting pairwise matching for {len(img_list)} images...")
     m = Matches(background_id=background_instance)
 
+    # Initialize IOU map for tracking overlaps across time
     iou_map = _create_iou_map(img_list, background_instance)
+    
+    # Process each pair of consecutive images
     for idx in range(1, len(img_list)):
-        # perform binary union on previous image:
+        # Get registered image for current frame and unregistered for previous
+        # (unregistered images may have different sizes due to padding)
         prev_img = unreg_img_list[idx - 1]
         img = img_list[idx]
 
-        # pad the image to avoid index errors
-        # calculate the padding size
+        # Pad previous image to match current image size (for alignment differences)
         padding = [
             (
                 (img.shape[i] - prev_img.shape[i]) // 2,
@@ -341,46 +542,65 @@ def match_instances_by_pairwise_binary_union(
             )
             for i in range(len(img.shape))
         ]
-        # pad the previous image with zeros
         prev_img = np.pad(prev_img, padding, mode="constant", constant_values=0)
 
+        # Compute binary union of current and previous images
         prev_img_bin = prev_img != background_instance
         img_bin = img != background_instance
         binary_union = np.logical_or(prev_img_bin, img_bin)
 
-        # id the overlapping components
+        # Find connected components in the binary union
         labels, _ = label_instance_ids(binary_union)
 
+        # Process each union component
         for union_id in np.unique(labels):
-
             if union_id == 0:
+                # Skip background
                 continue
 
+            # Create unique ID for this union instance at this time point
             formated_union_id = f"U_{idx}_{union_id}"
+            
+            # Get bounding box around the union component for efficiency
             union_mask = labels == union_id
             img_crop, crop_slices = _get_bounding_box_crop(img, union_mask)
             prev_img_crop, _ = _get_bounding_box_crop(prev_img, union_mask)
 
             if img_crop is None or prev_img_crop is None:
-                logging.warning(f"Union id {union_id} has no overlapping region in image {idx}. Skipping IOU calculation for this union instance.")
+                logging.warning(
+                    f"Union id {union_id} has no overlapping region in image {idx}. "
+                    f"Skipping IOU calculation for this union instance."
+                )
                 continue
 
-            original_instances = _get_non_background_instances(img_crop, union_mask[crop_slices], background_instance)
+            # Find which original instances overlap with this union component
+            original_instances = _get_non_background_instances(
+                img_crop, union_mask[crop_slices], background_instance
+            )
             orig_ids = [f"{idx}_{i}" for i in original_instances]
 
-            prev_original_instances = _get_non_background_instances(prev_img_crop, union_mask[crop_slices], background_instance)
+            prev_original_instances = _get_non_background_instances(
+                prev_img_crop, union_mask[crop_slices], background_instance
+            )
             prev_orig_ids = [f"{idx - 1}_{i}" for i in prev_original_instances]
 
+            # Compute IOU between overlapping instances
             prev_masks = _compute_instance_masks(prev_img_crop, prev_original_instances, crop_slices)
             curr_masks = _compute_instance_masks(img_crop, original_instances, crop_slices)
+            iou_matrix = _compute_iou_matrix(
+                prev_masks, curr_masks, prev_original_instances, original_instances
+            )
+            
+            # Store IOU values for morphological graph building
+            _populate_iou_map_wrapper(
+                iou_map, prev_orig_ids, orig_ids, iou_matrix, idx, len(img_list)
+            )
 
-            iou_matrix = _compute_iou_matrix(prev_masks, curr_masks, prev_original_instances, original_instances)
-            _populate_iou_map_wrapper(iou_map, prev_orig_ids, orig_ids, iou_matrix, idx, len(img_list))
-
+            # Record matches: connect both current and previous instances to this union
             _add_matches_for_instances(m, orig_ids, formated_union_id)
             _add_matches_for_instances(m, prev_orig_ids, formated_union_id)
 
-    # get the final matching
+    # Compute final lineage and TCUI mappings from the adjacency graph
     logging.info("Computing final matching from connected components...")
     original_ids_to_lineage, original_ids_to_tscui, graph = get_final_matching(
         adjacencies=m.original_to_shared_id,
@@ -391,7 +611,13 @@ def match_instances_by_pairwise_binary_union(
         enforce_no_split=enforce_no_split,
     )
 
-    logging.info(f"Pairwise matching complete. Lineage: {len(original_ids_to_lineage)} instances, TCUI: {len(original_ids_to_tscui)} instances.")
+    logging.info(
+        f"Pairwise matching complete. "
+        f"Lineage: {len(original_ids_to_lineage)} instances, "
+        f"TCUI: {len(original_ids_to_tscui)} instances."
+    )
+    
+    # Convert global mappings to per-image mappings
     lineage_mapping = _mapping_to_per_img_mapping(
         original_ids_to_lineage, num_images=len(img_list)
     )
@@ -410,37 +636,51 @@ def match_instances_by_binary_union(
     enforce_no_split=False,
 ):
     """
-    Matches the images using the union over all the binarised connected-component-id images.
+    Match instances using global binary union across ALL time points.
+
+    This mode computes a single binary union over all images in the series,
+    then finds connected components in that global union. All instances
+    that touch at any point in the series are considered connected.
+
+    Algorithm:
+    1. Compute binary union of ALL images (not pairwise)
+    2. Find connected components in the global union
+    3. For each image, map its instances to the union components they overlap
+    4. For consecutive image pairs, compute IOU for additional tracking info
+    5. Build morphological graph and compute lineage/TCUI mappings
 
     Properties:
-        - The instances that touch in the overlap of the images are considered the same instance.
-        - The connected component in the binarised union equals the overlap of all the instances in the images that overlap across the series.
+    - Instances that touch in ANY overlap across the series are connected
+    - The connected component in the global binary union equals the overlap
+      of all instances that should be in the same lineage
 
     Args:
-        img_list (list[np.ndarray]): A list of images of the same size to match the instances in.
-        background_instance (int): The id of the background instance.
-        verbose (bool): If True, print the progress of the matching.
+        img_list: List of label images (same size, 3D or 2D).
+        background_instance: The ID representing background.
+        verbose: If True, print progress information.
+        enforce_no_merge: If True, prevent merges in final mapping.
+        enforce_no_split: If True, prevent splits in final mapping.
 
     Returns:
-        matches (list[Matches]): A list of matches, one per image.
-        labels (np.ndarray): The labels of the connected components in the binarised union.
+        Tuple of (lineage_mapping, tcui_mapping, morphological_graph).
     """
     logging.info("Matching instances by global binary union...")
+    
+    # === STEP 1: Compute global binary union ===
+    # Start with zeros, then OR in each non-background image
     binary_union = np.zeros_like(img_list[0])
-
-    # calculate the union of all binarised labels
     for idx, img in enumerate(img_list):
         binary_img = img != background_instance
         binary_union = np.logical_or(binary_union, binary_img)
 
-    # run connected component analysis on the union
+    # === STEP 2: Find connected components in global union ===
     labels, _ = label_instance_ids(binary_union)
 
     union_instances = np.unique(labels)
-    # remove the background instance
+    # Remove background (typically 0)
     union_instances = [i for i in union_instances if i != 0]
 
-    # save the the union view as png with pil
+    # Save union view for debugging/visualization
     union_view = np.zeros_like(img_list[0])
     for union_id in union_instances:
         union_view[labels == union_id] = union_id
@@ -448,25 +688,39 @@ def match_instances_by_binary_union(
         union_view = Image.fromarray(union_view.astype(np.uint8) * 255)
         union_view.save("union_view.png")
     else:
-        write_to_nifti(union_view.astype(np.uint8), dtype=np.uint8, filename="union_view.nii.gz")
+        write_to_nifti(
+            union_view.astype(np.uint8), dtype=np.uint8, filename="union_view.nii.gz"
+        )
 
+    # === STEP 3: Map instances to union components ===
+    # For each image and each union component, find which instances overlap
     m = Matches(background_id=background_instance)
     for img_idx, img in enumerate(img_list):
         for union_id in union_instances:
-            original_instances = _get_non_background_instances(img, labels == union_id, background_instance)
+            original_instances = _get_non_background_instances(
+                img, labels == union_id, background_instance
+            )
             orig_ids = [f"{img_idx}_{i}" for i in original_instances]
+            # Format: U_0_{union_id} - union at initial time point
             union_id = f"U_0_{union_id}"
             _add_matches_for_instances(m, orig_ids, union_id)
 
+    # === STEP 4: Compute IOU for consecutive pairs ===
     iou_map = _create_iou_map(img_list, background_instance)
-    
-    logging.info(f"Calculating IOU for {len(union_instances)} union instances across {len(img_list)} images...")
+
+    logging.info(
+        f"Calculating IOU for {len(union_instances)} union instances "
+        f"across {len(img_list)} images..."
+    )
 
     for idx in range(1, len(img_list)):
-        logging.info(f"Processing image {idx}/{len(img_list)-1} for IOU calculation...")
+        logging.info(
+            f"Processing image {idx}/{len(img_list)-1} for IOU calculation..."
+        )
         prev_img = img_list[idx - 1]
         img = img_list[idx]
 
+        # Process each union component
         for union_id in union_instances:
             union_mask = labels == union_id
             img_crop, crop_slices = _get_bounding_box_crop(img, union_mask)
@@ -475,31 +729,41 @@ def match_instances_by_binary_union(
             if img_crop is None or prev_img_crop is None:
                 continue
 
-            original_instances = _get_non_background_instances(img_crop, union_mask[crop_slices], background_instance)
+            # Find instances overlapping this union component in both frames
+            original_instances = _get_non_background_instances(
+                img_crop, union_mask[crop_slices], background_instance
+            )
             orig_ids = [f"{idx}_{i}" for i in original_instances]
 
-            prev_original_instances = _get_non_background_instances(prev_img_crop, union_mask[crop_slices], background_instance)
+            prev_original_instances = _get_non_background_instances(
+                prev_img_crop, union_mask[crop_slices], background_instance
+            )
             prev_orig_ids = [f"{idx - 1}_{i}" for i in prev_original_instances]
 
+            # Record matches to union
             _add_matches_for_instances(m, orig_ids, f"U_{idx}_{union_id}")
             _add_matches_for_instances(m, prev_orig_ids, f"U_{idx}_{union_id}")
 
-            prev_masks = _compute_instance_masks(prev_img_crop, prev_original_instances, crop_slices)
-            curr_masks = _compute_instance_masks(img_crop, original_instances, crop_slices)
+            # Compute IOU between overlapping instances
+            prev_masks = _compute_instance_masks(
+                prev_img_crop, prev_original_instances, crop_slices
+            )
+            curr_masks = _compute_instance_masks(
+                img_crop, original_instances, crop_slices
+            )
+            iou_matrix = _compute_iou_matrix(
+                prev_masks, curr_masks, prev_original_instances, original_instances
+            )
+            _populate_iou_map_wrapper(
+                iou_map, prev_orig_ids, orig_ids, iou_matrix, idx, len(img_list)
+            )
 
-            iou_matrix = _compute_iou_matrix(prev_masks, curr_masks, prev_original_instances, original_instances)
-            _populate_iou_map_wrapper(iou_map, prev_orig_ids, orig_ids, iou_matrix, idx, len(img_list))
-
-            if idx == len(img_list) - 1:
-                iou_map["backward_in_time"][""].extend(prev_orig_ids)
-            _populate_iou_map_backward(iou_map, prev_orig_ids, orig_ids)
-
-    # get the final matching
-    # this will create connected component analysis across time and space
-    # if an instance is split due to the registration (either the connection of two parts of that instance is cut
-    # by the registration or vanished due to interpolation if connection was small) it can lead to the same orignal
-    # instance being matched to multiple instances in the union image
-    logging.info("Computing final matching from connected components (global view)...")
+    # === STEP 5: Compute final lineage and TCUI mappings ===
+    # This identifies connected components across all time points
+    # and assigns unique tracking IDs handling splits and merges
+    logging.info(
+        "Computing final matching from connected components (global view)..."
+    )
     original_ids_to_lineage, original_ids_to_tcui, morphological_graph = (
         get_final_matching(
             m.original_to_shared_id,
@@ -511,7 +775,13 @@ def match_instances_by_binary_union(
         )
     )
 
-    logging.info(f"Global matching complete. Lineage: {len(original_ids_to_lineage)} instances, TCUI: {len(original_ids_to_tcui)} instances.")
+    logging.info(
+        f"Global matching complete. "
+        f"Lineage: {len(original_ids_to_lineage)} instances, "
+        f"TCUI: {len(original_ids_to_tcui)} instances."
+    )
+    
+    # Convert to per-image mappings
     lineage_mapping = _mapping_to_per_img_mapping(
         original_ids_to_lineage, num_images=len(img_list)
     )
@@ -519,7 +789,73 @@ def match_instances_by_binary_union(
         original_ids_to_tcui, num_images=len(img_list)
     )
 
+    # Validate that all instances are properly mapped
+    _validate_all_instances_mapped(
+        img_list=img_list,
+        lineage_mapping=lineage_mapping,
+        tcui_mapping=tcui_mapping,
+        background_instance=background_instance,
+    )
+
     return lineage_mapping, tcui_mapping, morphological_graph
+
+
+def _validate_all_instances_mapped(
+    img_list,
+    lineage_mapping,
+    tcui_mapping,
+    background_instance,
+):
+    """
+    Validate that every original instance is mapped to valid lineage and TCUI IDs.
+
+    This validation ensures that:
+    1. All original instances appear in the lineage mapping
+    2. No instance maps to the background ID (invalid)
+    3. All original instances appear in the TCUI mapping
+
+    Args:
+        img_list: List of original images.
+        lineage_mapping: Mapping from original to lineage IDs.
+        tcui_mapping: Mapping from original to TCUI IDs.
+        background_instance: The ID representing background.
+
+    Raises:
+        ValueError: If any validation fails.
+    """
+    unmapped_lineage = []
+    unmapped_tcui = []
+
+    for img_idx, img in enumerate(img_list):
+        original_instances = np.unique(img)
+        original_instances = [
+            i for i in original_instances if i != background_instance
+        ]
+
+        for instance_id in original_instances:
+            # Check lineage mapping
+            if instance_id not in lineage_mapping[img_idx]:
+                unmapped_lineage.append(f"{img_idx}_{instance_id}")
+            elif lineage_mapping[img_idx][instance_id] == background_instance:
+                unmapped_lineage.append(f"{img_idx}_{instance_id}")
+
+            # Check TCUI mapping
+            if instance_id not in tcui_mapping[img_idx]:
+                unmapped_tcui.append(f"{img_idx}_{instance_id}")
+
+    if unmapped_lineage:
+        raise ValueError(
+            f"The following {len(unmapped_lineage)} instances are not mapped "
+            f"to a valid lineage ID: "
+            f"{unmapped_lineage[:10]}{'...' if len(unmapped_lineage) > 10 else ''}"
+        )
+
+    if unmapped_tcui:
+        raise ValueError(
+            f"The following {len(unmapped_tcui)} instances are not mapped "
+            f"to a valid tracked (TCUI) ID: "
+            f"{unmapped_tcui[:10]}{'...' if len(unmapped_tcui) > 10 else ''}"
+        )
 
 
 def validate_matched_by_union_images(
@@ -527,9 +863,20 @@ def validate_matched_by_union_images(
     union_instances,
     background_instance,
 ):
-    # Each of the labeled instances int he matched instances should be contained fully
-    # in a single instance in the union image
+    """
+    Validate that matched instances are fully contained within union instances.
 
+    Each labeled instance in a matched image should be completely contained within
+    a single instance in the union image. This ensures the matching is valid.
+
+    Args:
+        matched_images: List of images with matched/renumbered instances.
+        union_instances: The union label image.
+        background_instance: The ID representing background.
+
+    Raises:
+        ValueError: If any instance spans multiple union instances.
+    """
     for matched_img in matched_images:
         for instance in np.unique(matched_img):
             if instance == background_instance:
@@ -538,11 +885,13 @@ def validate_matched_by_union_images(
             unique_union_instances = np.unique(union_instance)
             if len(unique_union_instances) > 1:
                 raise ValueError(
-                    f"Instance {instance} in the matched image is not fully contained in a single instance in the union image."
+                    f"Instance {instance} in the matched image is not fully "
+                    f"contained in a single instance in the union image."
                 )
             if unique_union_instances[0] != instance:
                 raise ValueError(
-                    f"Instance {instance} is not matched to the same instance in the union image {unique_union_instances[0]}."
+                    f"Instance {instance} is not matched to the same instance "
+                    f"in the union image {unique_union_instances[0]}."
                 )
 
 
@@ -550,23 +899,24 @@ def match_instances_by_intersection_of_two_images(
     image_channel_a, image_channel_b, channel_id_a, channel_id_b, background_instance
 ) -> CrossChannelMatches:
     """
-    Matches the instances in the two images based on the binary union.
-    We will return two mappings:
-    - The mapping from the instances in the first image a to the instances in the second image b.
-    - The mapping from the instances in the second image b to the instances in the first image a.
+    Match instances between two channels based on intersection/overlap.
+
+    This is used for cross-channel matching (e.g., matching nuclei to cytoplasm).
+    Instances that overlap between the two channels are considered matches.
 
     Args:
-        image_channel_a (np.ndarray): The first image.
-        image_channel_b (np.ndarray): The second image.
-        channel_id_a (int): The id of the first channel.
-        channel_id_b (int): The id of the second channel.
-        background_instance (int): The id of the background instance.
+        image_channel_a: Label image from channel A.
+        image_channel_b: Label image from channel B.
+        channel_id_a: Identifier for channel A.
+        channel_id_b: Identifier for channel B.
+        background_instance: The ID representing background.
 
     Returns:
-        match_a_to_b: A  with the mapping from the instances in the first image a to the instances in the second image b.
-        match_b_to_a: A dictionary with the mapping from the instances in the second image b to the instances in the first image a.
+        CrossChannelMatches object containing bidirectional mappings.
     """
-    logging.info(f"Matching instances by intersection: channel {channel_id_a} vs {channel_id_b}...")
+    logging.info(
+        f"Matching instances by intersection: channel {channel_id_a} vs {channel_id_b}..."
+    )
     cross_channel_matches = CrossChannelMatches(
         channel_a_id=channel_id_a, channel_b_id=channel_id_b
     )
