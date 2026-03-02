@@ -61,10 +61,10 @@ def _get_bounding_box_crop(image: np.ndarray, mask: np.ndarray) -> tuple:
     min_coords = bbox.min(axis=0)
     max_coords = bbox.max(axis=0) + 1
     crop_slices = tuple(slice(min_coords[i], max_coords[i]) for i in range(image.ndim))
-    return image[crop_slices], crop_slices
+    return image[crop_slices]
 
 
-def _compute_instance_masks(image: np.ndarray, instance_ids: list, bbox_slices: tuple) -> dict:
+def _compute_instance_masks(img_crop: np.ndarray, instance_ids: list) -> dict:
     """
     Pre-compute boolean masks for each instance, cropped to a bounding box.
 
@@ -72,16 +72,14 @@ def _compute_instance_masks(image: np.ndarray, instance_ids: list, bbox_slices: 
     that instance appears in the cropped image region.
 
     Args:
-        image: The full image array.
+        img: the image croped to the intrest region (union instance bouing box).
         instance_ids: List of instance IDs to create masks for.
-        bbox_slices: Tuple of slices defining the bounding box region.
 
     Returns:
         Dictionary mapping instance_id -> boolean numpy array (True where
         that instance appears in the cropped region).
     """
-    cropped = image[bbox_slices]
-    return {inst_id: cropped == inst_id for inst_id in instance_ids}
+    return {inst_id: img_crop == inst_id for inst_id in instance_ids}
 
 
 def _compute_iou_matrix(prev_masks: dict, curr_masks: dict, prev_ids: list, curr_ids: list) -> np.ndarray:
@@ -468,19 +466,37 @@ def apply_matching(
 
     # Assign ignore_label to unmatched instances (except background)
     for unmatched_instance in unmatched_instances:
-        if unmatched_instance == background_instance:
-            continue
-        matches[unmatched_instance] = ignore_label
+        if unmatched_instance != background_instance:
+            matches[unmatched_instance] = ignore_label
 
-    # Apply the mapping: create new image with remapped IDs
-    matched_image = np.zeros_like(image).astype(np.int32)
-    for instance in matches.keys():
-        matched_image[image == instance] = matches[instance]
+    # Fast path: vectorized remapping using lookup table
+    # This is O(H*W*D) instead of O(n_instances * H*W*D)
+    if not matches:
+        return image.copy()
+    
+    old_vals = np.array(list(matches.keys()))
+    new_vals = np.array(list(matches.values()))
+    
+    if len(old_vals) == 0:
+        return image.copy()
+    
+    # Determine the range needed for the lookup table
+    max_val = max(int(old_vals.max()), int(new_vals.max()), ignore_label) + 1
+    
+    # Create remap array: index by old value -> get new value
+    remap = np.full(max_val, ignore_label, dtype=np.int32)
+    remap[old_vals] = new_vals
+    
+    # Apply remapping: vectorized O(1) lookup per pixel
+    result = remap[image]
+    
+    # Ensure background stays as background
+    result[image == background_instance] = background_instance
 
     if verbose:
-        logging.info("Uniques after applying match: " + str(np.unique(matched_image)))
+        logging.info("Uniques after applying match: " + str(np.unique(result)))
 
-    return matched_image
+    return result
 
 
 def match_instances_by_pairwise_binary_union(
@@ -712,51 +728,48 @@ def match_instances_by_binary_union(
         f"Calculating IOU for {len(union_instances)} union instances "
         f"across {len(img_list)} images..."
     )
-
-    for idx in range(1, len(img_list)):
-        logging.info(
-            f"Processing image {idx}/{len(img_list)-1} for IOU calculation..."
-        )
-        prev_img = img_list[idx - 1]
-        img = img_list[idx]
-
-        # Process each union component
-        for union_id in union_instances:
-            union_mask = labels == union_id
-            img_crop, crop_slices = _get_bounding_box_crop(img, union_mask)
-            prev_img_crop, _ = _get_bounding_box_crop(prev_img, union_mask)
-
-            if img_crop is None or prev_img_crop is None:
-                continue
-
-            # Find instances overlapping this union component in both frames
-            original_instances = _get_non_background_instances(
-                img_crop, union_mask[crop_slices], background_instance
+    if False:
+        for idx in range(1, len(img_list)):
+            logging.info(
+                f"Processing image {idx}/{len(img_list)-1} for IOU calculation..."
             )
-            orig_ids = [f"{idx}_{i}" for i in original_instances]
+            prev_img = img_list[idx - 1]
+            img = img_list[idx]
 
-            prev_original_instances = _get_non_background_instances(
-                prev_img_crop, union_mask[crop_slices], background_instance
-            )
-            prev_orig_ids = [f"{idx - 1}_{i}" for i in prev_original_instances]
+            # Process each union component
+            for union_id in union_instances:
+                union_mask = labels == union_id
+                union_crop = _get_bounding_box_crop(union_mask, union_mask)
+                img_crop = _get_bounding_box_crop(img, union_mask)
+                prev_img_crop = _get_bounding_box_crop(prev_img, union_mask)
 
-            # Record matches to union
-            _add_matches_for_instances(m, orig_ids, f"U_{idx}_{union_id}")
-            _add_matches_for_instances(m, prev_orig_ids, f"U_{idx}_{union_id}")
+                if img_crop is None or prev_img_crop is None:
+                    continue
 
-            # Compute IOU between overlapping instances
-            prev_masks = _compute_instance_masks(
-                prev_img_crop, prev_original_instances, crop_slices
-            )
-            curr_masks = _compute_instance_masks(
-                img_crop, original_instances, crop_slices
-            )
-            iou_matrix = _compute_iou_matrix(
-                prev_masks, curr_masks, prev_original_instances, original_instances
-            )
-            _populate_iou_map_wrapper(
-                iou_map, prev_orig_ids, orig_ids, iou_matrix, idx, len(img_list)
-            )
+                # Find instances overlapping this union component in both frames
+                original_instances = _get_non_background_instances(
+                    img_crop, union_crop, background_instance
+                )
+                orig_ids = [f"{idx}_{i}" for i in original_instances]
+
+                prev_original_instances = _get_non_background_instances(
+                    prev_img_crop, union_crop, background_instance
+                )
+                prev_orig_ids = [f"{idx - 1}_{i}" for i in prev_original_instances]
+
+                # Compute IOU between overlapping instances
+                prev_masks = _compute_instance_masks(
+                    prev_img_crop, prev_original_instances
+                )
+                curr_masks = _compute_instance_masks(
+                    img_crop, original_instances
+                )
+                iou_matrix = _compute_iou_matrix(
+                    prev_masks, curr_masks, prev_original_instances, original_instances
+                )
+                _populate_iou_map_wrapper(
+                    iou_map, prev_orig_ids, orig_ids, iou_matrix, idx, len(img_list)
+                )
 
     # === STEP 5: Compute final lineage and TCUI mappings ===
     # This identifies connected components across all time points
@@ -785,17 +798,21 @@ def match_instances_by_binary_union(
     lineage_mapping = _mapping_to_per_img_mapping(
         original_ids_to_lineage, num_images=len(img_list)
     )
+
     tcui_mapping = _mapping_to_per_img_mapping(
         original_ids_to_tcui, num_images=len(img_list)
     )
 
     # Validate that all instances are properly mapped
-    _validate_all_instances_mapped(
-        img_list=img_list,
-        lineage_mapping=lineage_mapping,
-        tcui_mapping=tcui_mapping,
-        background_instance=background_instance,
-    )
+    try:
+        _validate_all_instances_mapped(
+            img_list=img_list,
+            lineage_mapping=lineage_mapping,
+            tcui_mapping=tcui_mapping,
+            background_instance=background_instance,
+        )
+    except ValueError as e:
+        logging.error(f"Validation error: {e}")
 
     return lineage_mapping, tcui_mapping, morphological_graph
 

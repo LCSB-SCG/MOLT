@@ -118,48 +118,62 @@ def get_morphological_graph_global_view_mapping(
         # Get all instance nodes connected to this union
         connected_nodes = [n for n in graph.neighbors(node) if "U_" not in n]
 
+        if len(connected_nodes) == 0:
+            continue
+
         # Group instances by their time point
-        timepoints = sorted([int(n.split("_")[0]) for n in connected_nodes])
+        timepoints = sorted(list(set([int(n.split("_")[0]) for n in connected_nodes])))
         timepoint_to_nodes = {tp: [] for tp in timepoints}
         for n in connected_nodes:
             timepoint = int(n.split("_")[0])
             timepoint_to_nodes[timepoint].append(n)
 
-        # Connect instances between consecutive time points
-        for i in range(len(timepoints) - 1):
-            current_timepoint = timepoints[i]
-            next_timepoint = timepoints[i + 1]
-
-            for current_node in timepoint_to_nodes[current_timepoint]:
-                # Add current node if not present
-                if not new_graph.has_node(current_node):
-                    new_graph.add_node(current_node)
-                    nx.set_node_attributes(
-                        new_graph,
-                        {current_node: {"timepoint": current_timepoint}},
-                    )
-                
-                for next_node in timepoint_to_nodes[next_timepoint]:
-                    # Add next node if not present
-                    if not new_graph.has_node(next_node):
-                        new_graph.add_node(next_node)
+        if len(timepoint_to_nodes) == 1:
+            # Add the nodes to the graph without edges as they are all from the same time point
+            for tp, nodes in timepoint_to_nodes.items():
+                for node in nodes:
+                    if not new_graph.has_node(node):
+                        new_graph.add_node(node)
                         nx.set_node_attributes(
                             new_graph,
-                            {next_node: {"timepoint": next_timepoint}},
+                            {node: {"timepoint": tp}},
+                        )
+        else:
+            # Connect instances between consecutive time points
+            for i in range(len(timepoints) - 1):
+                current_timepoint = timepoints[i]
+                next_timepoint = timepoints[i + 1]
+
+                for current_node in timepoint_to_nodes[current_timepoint]:
+                    # Add current node if not present
+                    if not new_graph.has_node(current_node):
+                        new_graph.add_node(current_node)
+                        nx.set_node_attributes(
+                            new_graph,
+                            {current_node: {"timepoint": current_timepoint}},
                         )
                     
-                    # Add edge between consecutive time points
-                    new_graph.add_edge(current_node, next_node)
-                    
-                    # Store IOU value on edge if available
-                    if iou and current_node in iou.get("forward_in_time", {}):
-                        for o_node, iou_value in iou["forward_in_time"][current_node]:
-                            if o_node == next_node:
-                                nx.set_edge_attributes(
-                                    new_graph,
-                                    {(current_node, next_node): {"iou": iou_value}},
-                                )
-                                break
+                    for next_node in timepoint_to_nodes[next_timepoint]:
+                        # Add next node if not present
+                        if not new_graph.has_node(next_node):
+                            new_graph.add_node(next_node)
+                            nx.set_node_attributes(
+                                new_graph,
+                                {next_node: {"timepoint": next_timepoint}},
+                            )
+                        
+                        # Add edge between consecutive time points
+                        new_graph.add_edge(current_node, next_node)
+                        
+                        # Store IOU value on edge if available
+                        if iou and current_node in iou.get("forward_in_time", {}):
+                            for o_node, iou_value in iou["forward_in_time"][current_node]:
+                                if o_node == next_node:
+                                    nx.set_edge_attributes(
+                                        new_graph,
+                                        {(current_node, next_node): {"iou": iou_value}},
+                                    )
+                                    break
 
     # Apply merge/split constraints
     new_graph = enforce_no_merge_split(
@@ -324,6 +338,11 @@ def assign_tcui_ids(morphological_graph: nx.Graph):
         for node in morphological_graph.nodes
         if morphological_graph.in_degree(node) == 0
     ]
+
+    # Handle edge case: no root nodes (shouldn't happen in valid tracking graphs)
+    if not root_nodes:
+        root_nodes = list(morphological_graph.nodes)
+
     current_id = 0
     mapping = {}
 

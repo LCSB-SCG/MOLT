@@ -59,6 +59,8 @@ class InstanceMatcher:
         self.collect_stats = self.config["InstanceMatcher"]["collect_stats"]
         self.save_lineage_images = self.config["InstanceMatcher"]["save_lineage_images"]
         self.save_tracked_images = self.config["InstanceMatcher"]["save_tracked_images"]
+        self.save_reg_lineage_images = self.config["InstanceMatcher"]["save_reg_lineage_images"]
+        self.save_reg_tracked_images = self.config["InstanceMatcher"]["save_reg_tracked_images"]
         self.save_metadata = self.config["InstanceMatcher"]["save_metadata"]
         self.write_ctc_format = self.config["InstanceMatcher"]["write_ctc_format"]
 
@@ -361,6 +363,7 @@ class InstanceMatcher:
         unregistered_instance_imgs = [
             nib.load(filename=img).get_fdata().astype(np.uint16) for img in unregistered_label_paths
         ]
+        logging.info(F"Registered image paths: {registered_label_paths}")
         logging.info(f"Loaded {len(registered_instance_imgs)} registered and {len(unregistered_instance_imgs)} unregistered images.")
 
         # Also make a folder for the ctc results, all the files in this folder are only sym_links to the result files
@@ -489,7 +492,42 @@ class InstanceMatcher:
                     timepoint = int(extract_week_from_filepath(nifti_path).replace("_weeks", ""))
                     tiff_path = os.path.join(ctc_sub_RES, f"mask{timepoint:03d}.tif")
                     write_to_tiff(tiff_data=img, filename=tiff_path)
+                    
+        if self.save_reg_lineage_images:
+            # Apply the matches to the registered images as well and save them as lineage images if desired
+            matched_reg_lineage_images = [
+                apply_matching(matches=lineage_mapping[idx], image=reg_img, background_instance=background_instance, ignore_label=ignore_label)
+                for idx, reg_img in enumerate(registered_instance_imgs)
+            ]
+            logging.info(f"Saving registered lineage images for {subject_id} - {roi} - {channel_id}...")
+            for idx, img in enumerate(matched_reg_lineage_images):
+                nifti_path = registered_label_paths[idx].replace(
+                        "instances_padded_for_reg.nii.gz", "reg_lineage.nii.gz"
+                    ).replace("instances_padded_for_reg_reg.nii.gz", "reg_lineage.nii.gz")
+                write_to_nifti(
+                    nifti_data=img,
+                    dtype=img.dtype,
+                    filename=nifti_path
+                )
+                logging.info(f"Saved registered lineage image to {registered_label_paths[idx].replace('reg_instances.nii.gz', 'reg_lineage.nii.gz')}")
 
+        if self.save_reg_tracked_images:
+            # Apply the matches to the registered images as well and save them as tracked images if desired
+            matched_reg_tcui_images = [
+                apply_matching(matches=tcui_mapping[idx], image=reg_img, background_instance=background_instance, ignore_label=ignore_label)
+                for idx, reg_img in enumerate(registered_instance_imgs)
+            ]
+            logging.info(f"Saving registered tracked images for {subject_id} - {roi} - {channel_id}...")
+            for idx, img in enumerate(matched_reg_tcui_images):
+                nifti_path = registered_label_paths[idx].replace(
+                        "instances_padded_for_reg.nii.gz", "reg_tracked.nii.gz"
+                    ).replace("instances_padded_for_reg_reg.nii.gz", "reg_tracked.nii.gz")
+                write_to_nifti(
+                    nifti_data=img,
+                    dtype=img.dtype,
+                    filename=nifti_path
+                )
+                logging.info(f"Saved registered tracked image to {nifti_path}")
 
         if self.save_metadata:
             logging.info(f"Saving metadata for {subject_id} - {roi} - {channel_id}...")

@@ -74,6 +74,8 @@
         "collect_stats": false,
         "save_lineage_images": true,
         "save_tracked_images": true,
+        "save_reg_lineage_images": false,
+        "save_reg_tracked_images": false,
         "save_metadata": true,
         "write_ctc_format": true,
         "label_settings_per_channel": [

@@ -297,7 +297,19 @@ class Cohort:
                                     reg_to
                                 ] = {}
                                 for reg_file in os.listdir(path):
-                                    if reg_file.endswith("_reg.nii.gz"):
+                                    if reg_file.endswith("reg_lineage.nii.gz"):
+                                        label_data[channel][label_setting][
+                                            "registrations_to"
+                                        ][reg_to]["reg_lineage"] = os.path.join(
+                                            path, reg_file
+                                        )
+                                    elif reg_file.endswith("reg_tracked.nii.gz"):
+                                        label_data[channel][label_setting][
+                                            "registrations_to"
+                                        ][reg_to]["reg_tracked"] = os.path.join(
+                                            path, reg_file
+                                        )
+                                    elif reg_file.endswith("_reg.nii.gz"):
                                         label_data[channel][label_setting][
                                             "registrations_to"
                                         ][reg_to]["reg_instances"] = os.path.join(
@@ -337,7 +349,15 @@ class Cohort:
                                     ] = False
 
                                 # Save the path to the file
-                                if file.endswith("_padded_for_reg.nii.gz"):
+                                if file == "reg_lineage.nii.gz":
+                                    label_data[channel][label_setting][
+                                        "reg_lineage"
+                                    ] = path
+                                elif file == "reg_tracked.nii.gz":
+                                    label_data[channel][label_setting][
+                                        "reg_tracked"
+                                    ] = path
+                                elif file.endswith("_padded_for_reg.nii.gz"):
                                     label_data[channel][label_setting][
                                         "padded_instances_for_registration"
                                     ] = path
@@ -685,6 +705,8 @@ class Cohort:
             allowed_file_types = [
                 "reg_instances",
                 "reg_nifti",
+                "reg_lineage",
+                "reg_tracked",
                 AFFINE_TRANS,
                 DEFORMABLE_TRANS,
                 OVERLAP_NIFTI_NAME,
@@ -809,13 +831,13 @@ class Cohort:
 
                             if information_source == "label" and w == registration_to:
                                 # the original file equals a registration to itself
-                                file_list.append(
-                                    self.data[s][r][w][information_source][c][
-                                        label_setting
-                                    ][
-                                        "padded_instances_for_registration"  # remove the "reg_" prefix
-                                    ]
-                                )
+                                label_data = self.data[s][r][w][information_source][c][
+                                    label_setting
+                                ]
+                                if reg_file_type in label_data:
+                                    file_list.append(label_data[reg_file_type])
+                                else:
+                                    file_list.append(label_data["padded_instances_for_registration"])
                                 continue
                             if information_source == "label":
                                 # Accessing registered label files --> access label_setting folder

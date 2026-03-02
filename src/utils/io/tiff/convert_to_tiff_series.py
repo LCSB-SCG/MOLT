@@ -26,6 +26,7 @@ def create_tiff_sequence(
     label_settings: dict = None,
     channel: str = "channel_1",
     file_type: str = "instances",
+    reg_file_type: str = "reg_instances",
     save_as_4d: bool = False,
     use_registered: bool = False,
     registration_to: str = "",
@@ -58,6 +59,9 @@ def create_tiff_sequence(
             else:
                 output_dir = os.path.join(results_folder, subject, roi, f"tiff_series{'_' + registration_to if use_registered else ''}")
 
+            if use_registered and reg_file_type != "reg_instances":
+                output_dir = output_dir + f"_{reg_file_type}"
+
             os.makedirs(output_dir, exist_ok=True)
             
             # Get the weeks for the subject and ROI
@@ -81,7 +85,7 @@ def create_tiff_sequence(
                             file_type=file_type,
                             registered=use_registered,
                             registration_to=registration_to,
-                            reg_file_type="reg_instances"
+                            reg_file_type=reg_file_type
                         )[0]
                     else:
                         nifti_file = cohort.get_information_source_files_as_list(
@@ -92,9 +96,9 @@ def create_tiff_sequence(
                             weeks=[week],
                             registered=use_registered,
                             registration_to=registration_to,
-                            reg_file_type="reg_nifti"
+                            reg_file_type=reg_file_type
                         )[0]
-                
+                    print(f"Loading NIfTI file: {nifti_file}")
                     # Load the nifti file
                     nifti_img = nib.load(nifti_file)
                     nifti_data = nifti_img.get_fdata()
@@ -132,7 +136,7 @@ def create_tiff_sequence(
                             file_type=file_type,
                             registered=use_registered,
                             registration_to=registration_to,
-                            reg_file_type="reg_instances"
+                            reg_file_type=reg_file_type
                         )[0]
                     else:
                         nifti_file = cohort.get_information_source_files_as_list(
@@ -143,9 +147,9 @@ def create_tiff_sequence(
                             weeks=[week],
                             registered=use_registered,
                             registration_to=registration_to,
-                            reg_file_type="reg_nifti"
+                            reg_file_type=reg_file_type
                         )[0]
-                    
+                    print(f"Loading NIfTI file: {nifti_file}")
                     # Load the nifti file
                     nifti_img = nib.load(nifti_file)
                     nifti_data = nifti_img.get_fdata()
