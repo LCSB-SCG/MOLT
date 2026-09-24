@@ -46,4 +46,4 @@ PhC-C2DL-PSC Lineage and Individual Tracking Result
 Region 1 | <img width="300" alt="PhC-C2DL-PSC-lineage-01.gif" src=visuals/PhC-C2DL-PSC-lineage-01.gif>   |  <img width="300" alt="PhC-C2DL-PSC-tracked-01.gif" src=visuals/PhC-C2DL-PSC-tracked-01.gif>|  Region 2 |<img width="300" alt="PhC-C2DL-PSC-lineage-02.gif" src=visuals/PhC-C2DL-PSC-lineage-02.gif>   |  <img width="300" alt="PhC-C2DL-PSC-tracked-02.gif" src=visuals/PhC-C2DL-PSC-tracked-02.gif>
 
 ## Publication and Citation
-The paper related to this work can be found [placeholder until published](https://doi/placeholder). Please cite this work the following publication is used in your research.
+The paper related to this work can be found [placeholder until published](https://link.springer.com/article/10.1186/s12859-026-06434-y). Please cite this work the following publication is used in your research.
